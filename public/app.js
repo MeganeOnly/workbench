@@ -15,6 +15,9 @@
   let bookmarks = [];
   let didaToday = null;
   let didaFocus = null;
+  let rssData = null;      // RSS 信息卡数据（/api/rss）
+  let feedsList = [];      // RSS 订阅源列表（设置面板管理，/api/feeds）
+  let searchQ = '';        // 顶栏搜索关键字（已小写；空 = 不过滤）
   let workbenchOnline = false;
 
   // ---- 系统信息卡定义（内置，非 buttons.json 按钮） ----
@@ -24,6 +27,7 @@
     'sys-bookmarks': { id: 'sys-bookmarks', name: '书签',          size: 'small', kind: 'bookmarks' },
     'sys-dida-today':{ id: 'sys-dida-today', name: '滴答今日任务', size: 'large', kind: 'dida-today' },
     'sys-dida-focus':{ id: 'sys-dida-focus', name: '滴答专注',     size: 'small', kind: 'stat' },
+    'sys-rss':       { id: 'sys-rss',       name: 'RSS 订阅',      size: 'wide',  kind: 'rss' },
   };
 
   // 卡片顺序持久化（localStorage，仅本机浏览器）
@@ -43,6 +47,7 @@
     'sys-bookmarks': '★',
     'sys-dida-today': '今',
     'sys-dida-focus': '⏱',
+    'sys-rss': '≡',
   };
 
   // ---- 卡片图标：按钮带 icon 字段（服务端检测 public/icons/<id>.ico 是否存在后返回）
@@ -161,7 +166,7 @@
   // ---- 顺序管理 ----
   function defaultOrder() {
     const func = buttons.map(b => b.id);
-    return [...func, 'sys-balance', 'sys-status', 'sys-bookmarks', 'sys-dida-today', 'sys-dida-focus'];
+    return [...func, 'sys-balance', 'sys-status', 'sys-bookmarks', 'sys-dida-today', 'sys-dida-focus', 'sys-rss'];
   }
 
   function getOrder() {
@@ -184,6 +189,42 @@
     if (size === 'large') return 'span-large';
     if (size === 'small') return 'span-small';
     return 'span-wide';
+  }
+
+  // ---- 顶栏快速搜索：关键字匹配 ----
+  function bmMatches(bm) {
+    return (bm.name || '').toLowerCase().includes(searchQ) || (bm.url || '').toLowerCase().includes(searchQ);
+  }
+
+  function cardMatchesSearch(id) {
+    if (SYS_CARDS[id]) {
+      if ((SYS_CARDS[id].name || '').toLowerCase().includes(searchQ)) return true;
+      // 书签卡：任一书签名/网址命中即保留（卡内只显示命中的书签）
+      if (id === 'sys-bookmarks') return bookmarks.some(bmMatches);
+      return false;
+    }
+    const b = buttons.find(x => x.id === id);
+    if (!b) return false;
+    return (b.name || '').toLowerCase().includes(searchQ)
+      || (b.description || '').toLowerCase().includes(searchQ)
+      || (b.id || '').toLowerCase().includes(searchQ);
+  }
+
+  // 回车：执行顺序中第一个匹配（功能卡 = 点击执行；书签卡 = 打开第一本命中的书签）
+  function runFirstSearchMatch() {
+    if (!searchQ) return;
+    for (const id of getOrder()) {
+      if (!cardMatchesSearch(id)) continue;
+      if (SYS_CARDS[id]) {
+        if (id === 'sys-bookmarks') {
+          const bm = bookmarks.find(bmMatches);
+          if (bm) openExternal(bm.url);
+        }
+        continue; // 其余信息卡没有"执行"语义
+      }
+      const b = buttons.find(x => x.id === id);
+      if (b && b.visible !== false) { runButton(b); return; }
+    }
   }
 
   // ---- keyed 渲染：卡片缓存（轮询刷新复用 DOM，不打断拖拽） ----
@@ -278,6 +319,12 @@
         if (app) runButton(app);
         else openExternal('https://www.dida365.com/webapp/');
       });
+    } else if (id === 'sys-rss') {
+      el.innerHTML =
+        '<div class="card-head"><h3><span class="card-icon"></span>RSS 订阅</h3></div>' +
+        '<span class="drag-hint" title="按住拖动换位">⠿</span>' +
+        '<div class="rss-list"></div>';
+      refs.list = el.querySelector('.rss-list');
     }
     applyCardIcon(el.querySelector('.card-icon'), { id });
     const rec = { el, refs, current: null };
@@ -441,14 +488,16 @@
       });
     } else if (id === 'sys-bookmarks') {
       refs.list.innerHTML = '';
-      if (!bookmarks.length) {
+      // 搜索时只显示命中的书签（卡片本身是否可见由 renderGrid 的搜索过滤决定）
+      const shown = searchQ ? bookmarks.filter(bmMatches) : bookmarks;
+      if (!shown.length) {
         const li = document.createElement('li');
         li.className = 'bm-card-empty';
-        li.textContent = '暂无书签，点侧栏 + 添加';
+        li.textContent = searchQ ? '没有匹配的书签' : '暂无书签，点侧栏 + 添加';
         refs.list.appendChild(li);
         return;
       }
-      bookmarks.slice(0, 6).forEach(bm => {
+      shown.slice(0, 6).forEach(bm => {
         const a = document.createElement('a');
         a.className = 'bm-item';
         a.dataset.bmId = bm.id;
@@ -470,6 +519,8 @@
       renderDidaTodayList(refs.list, layout === 'grid' ? 5 : 8);
     } else if (id === 'sys-dida-focus') {
       renderDidaFocus(refs.value);
+    } else if (id === 'sys-rss') {
+      renderRssList(refs.list);
     }
   }
 
@@ -650,6 +701,80 @@
     valueEl.textContent = parts.join(' ');
   }
 
+  // ---- RSS 信息卡渲染（每个源一个小标题 + 最新条目链接列表） ----
+  function fmtRssDate(ts) {
+    if (!ts) return '';
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return '';
+    return (d.getMonth() + 1) + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  function renderRssList(listEl) {
+    listEl.innerHTML = '';
+    if (!rssData) {
+      const p = document.createElement('div');
+      p.className = 'rss-item rss-empty';
+      p.textContent = '读取中...';
+      listEl.appendChild(p);
+      return;
+    }
+    if (!rssData.feeds || !rssData.feeds.length) {
+      const p = document.createElement('div');
+      p.className = 'rss-item rss-empty';
+      p.textContent = '暂无订阅源：样式 → RSS 订阅 中添加';
+      listEl.appendChild(p);
+      return;
+    }
+    for (const f of rssData.feeds) {
+      const h = document.createElement('div');
+      h.className = 'rss-feed-title' + (f.ok === false ? ' err' : '') + (f.stale ? ' stale' : '');
+      h.textContent = f.name || f.feedTitle || f.url;
+      h.title = f.url + (f.ok === false ? '\n获取失败: ' + (f.error || '') : (f.stale ? '\n本次抓取失败，显示上次缓存内容' : ''));
+      if (f.url) {
+        h.addEventListener('click', () => openExternal(f.url));
+        h.style.cursor = 'pointer';
+      }
+      listEl.appendChild(h);
+      if (f.ok === false) {
+        const p = document.createElement('div');
+        p.className = 'rss-item rss-empty';
+        p.textContent = '获取失败: ' + (f.error || '未知错误');
+        p.title = f.error || '';
+        listEl.appendChild(p);
+        continue;
+      }
+      for (const it of (f.items || [])) {
+        const a = document.createElement('a');
+        a.className = 'rss-item';
+        a.href = it.link || '#';
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.draggable = false;
+        const t = document.createElement('span');
+        t.className = 'rss-item-title';
+        t.textContent = it.title;
+        a.appendChild(t);
+        const d = document.createElement('span');
+        d.className = 'rss-item-date';
+        d.textContent = fmtRssDate(it.ts);
+        a.appendChild(d);
+        a.title = it.title + (it.link ? '\n' + it.link : '');
+        listEl.appendChild(a);
+      }
+    }
+  }
+
+  // ---- 刷新 RSS 数据（偏好关闭时不抓取；服务端 15 分钟缓存兜底） ----
+  async function refreshRss() {
+    if ((document.body.dataset.rss || 'on') === 'off') return;
+    try {
+      rssData = await fetchJSON('/api/rss');
+    } catch (e) {
+      rssData = { ok: false, error: String(e && e.message || e) };
+    }
+    renderGrid();
+  }
+
   // ---- 全量渲染（keyed：复用节点，按序 append 实现排序） ----
   function renderGrid() {
     if (dragActive) return; // 拖拽中跳过，避免重排打断手势
@@ -658,6 +783,8 @@
     const sideCol = document.getElementById('side-col');
     for (const id of order) {
       if (SYS_CARDS[id]) {
+        // RSS 卡按偏好开关显隐（off 时不渲染不占位，等同未安装）
+        if (id === 'sys-rss' && (document.body.dataset.rss || 'on') === 'off') continue;
         ensureSystemCard(id);
         renderSystemCard(id);
       } else {
@@ -688,6 +815,14 @@
         rec.el.remove();
         continue;
       }
+      // RSS 卡偏好关闭：从 DOM 移除（保留缓存与顺序位，重新打开原地回来）
+      if (id === 'sys-rss' && (document.body.dataset.rss || 'on') === 'off') {
+        rec.el.remove();
+        continue;
+      }
+      // 顶栏搜索过滤：有搜索词时隐藏不匹配卡片（仅 display 隐藏不卸载，清空即恢复；
+      // 不可见卡（上两行 continue）不参与过滤）
+      rec.el.style.display = (!searchQ || cardMatchesSearch(id)) ? '' : 'none';
       // 双栏仪表盘（split）三栏分配：
       //   dida-col（左）= 滴答今日任务卡；side-col（右）= 其余信息卡；buttons-grid（中）= 功能卡
       //   split-center：dida-col（中）= 今日任务（顶）+ 快捷方式启动卡（底）；buttons-grid（左）= 其余功能卡
@@ -1102,14 +1237,22 @@
     } catch (e) {
       bookmarks = [];
     }
+    renderSidebarBookmarks();
+    renderGrid();
+  }
+
+  // 侧栏书签渲染（独立出来供搜索过滤复用：有搜索词时只显示命中的书签）
+  function renderSidebarBookmarks() {
     bookmarkList.innerHTML = '';
-    if (bookmarks.length === 0) {
+    const shown = searchQ ? bookmarks.filter(bmMatches) : bookmarks;
+    if (!shown.length) {
       const li = document.createElement('li');
       li.className = 'bookmark-empty';
-      li.textContent = '暂无书签，点 + 添加';
+      li.textContent = searchQ ? '没有匹配的书签' : '暂无书签，点 + 添加';
       bookmarkList.appendChild(li);
-    } else {
-      for (const bm of bookmarks) {
+      return;
+    }
+    for (const bm of shown) {
         const li = document.createElement('li');
         li.className = 'bookmark-item bm-item';
         li.dataset.bmId = bm.id;
@@ -1149,9 +1292,7 @@
         li.appendChild(del);
 
         bookmarkList.appendChild(li);
-      }
     }
-    renderGrid();
   }
 
   // ---- 书签拖拽排序（指针事件实现：按住书签项任意位置拖动，位移 >6px 进入拖拽；轻点 = 打开/删除）
@@ -1287,13 +1428,49 @@
     if (e.key === 'Enter') bmUrl.focus();
   });
 
-  // ---- 样式设置（主题 + 布局 + 六个偏好开关，localStorage 持久化） ----
+  // ---- 顶栏快速搜索：输入即过滤卡片墙与侧栏书签；回车执行第一个匹配；Esc 清空 ----
+  const searchInput = document.getElementById('quick-search');
+
+  function applySearch(value) {
+    searchQ = (value || '').trim().toLowerCase();
+    renderSidebarBookmarks();
+    renderGrid();
+  }
+
+  if (searchInput) {
+    searchInput.addEventListener('input', () => applySearch(searchInput.value));
+    searchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        runFirstSearchMatch();
+      } else if (e.key === 'Escape') {
+        searchInput.value = '';
+        applySearch('');
+        searchInput.blur();
+      }
+    });
+  }
+
+  // 「/」聚焦搜索框（不在输入框里时；偏好关闭搜索框时忽略）
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!searchInput || document.body.dataset.search === 'off') return;
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    e.preventDefault();
+    searchInput.focus();
+    searchInput.select();
+  });
+
+  // ---- 样式设置（主题 + 布局 + 偏好开关，localStorage 持久化） ----
   const THEME_KEY = 'workbench-theme';
   const LAYOUT_KEY = 'workbench-layout';
   const SIDEBAR_KEY = 'workbench-sidebar';
   const BIGNUM_KEY = 'workbench-bignum';
   const COUNTUP_KEY = 'workbench-countup';
   const ICONS_KEY = 'workbench-icons';
+  const SEARCH_KEY = 'workbench-search';
+  const RSS_KEY = 'workbench-rss';
   const styleBtn = document.getElementById('style-btn');
   const stylePanel = document.getElementById('style-panel');
 
@@ -1302,6 +1479,8 @@
     'bignum-switch': BIGNUM_KEY,
     'countup-switch': COUNTUP_KEY,
     'icons-switch': ICONS_KEY,
+    'search-switch': SEARCH_KEY,
+    'rss-switch': RSS_KEY,
   };
 
   function applyStyle() {
@@ -1322,6 +1501,8 @@
       el.classList.toggle('active', el.dataset.layoutOpt === layout);
     });
     renderGrid(); // 布局/开关变化时重渲染（keyed 复用，开销极小）
+    // RSS 卡从关到开且尚无数据时立即拉取（开关切换即时出内容）
+    if ((document.body.dataset.rss || 'on') === 'on' && !rssData) refreshRss();
   }
 
   function setStyle(kind, value) {
@@ -1669,10 +1850,135 @@
     }
   }
 
+  // ---- 设置面板：RSS 订阅源管理（增删；数据同样驱动 sys-rss 信息卡） ----
+  let feedsSig = '';
+
+  function renderFeedsPanel() {
+    const ul = document.getElementById('rss-list');
+    if (!ul) return;
+    const sig = feedsList.map((f) => [f.id, f.name, f.url].join('|')).join('\n');
+    if (sig === feedsSig && ul.childElementCount) return;
+    feedsSig = sig;
+    ul.innerHTML = '';
+    if (!feedsList.length) {
+      const li = document.createElement('li');
+      li.className = 'sc-empty';
+      li.textContent = '还没有订阅源，填写地址后点「添加订阅源」';
+      ul.appendChild(li);
+      return;
+    }
+    for (const f of feedsList) {
+      const li = document.createElement('li');
+      li.className = 'sc-item';
+      const row = document.createElement('div');
+      row.className = 'sc-item-row';
+      const icon = document.createElement('span');
+      icon.className = 'sc-item-icon';
+      icon.textContent = '≡';
+      const nm = document.createElement('span');
+      nm.className = 'sc-item-name';
+      nm.textContent = f.name;
+      const pt = document.createElement('span');
+      pt.className = 'sc-item-path';
+      pt.textContent = f.url;
+      pt.title = f.url;
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'sc-del';
+      del.textContent = '删除';
+      del.title = '删除订阅源 ' + f.name;
+      del.addEventListener('click', async () => {
+        del.disabled = true;
+        try {
+          const r = await fetch('/api/feeds/' + encodeURIComponent(f.id), { method: 'DELETE' });
+          const res = await r.json().catch(() => ({}));
+          if (res.ok) {
+            showToast('已删除: ' + f.name, 'ok');
+            await refreshFeedsData(true);
+          } else {
+            showToast('删除失败: ' + (res.error || '未知错误'), 'err');
+            del.disabled = false;
+          }
+        } catch (e) {
+          showToast('删除失败: ' + e.message, 'err');
+          del.disabled = false;
+        }
+      });
+      row.appendChild(icon);
+      row.appendChild(nm);
+      row.appendChild(pt);
+      row.appendChild(del);
+      li.appendChild(row);
+      ul.appendChild(li);
+    }
+  }
+
+  // force 为 true 时强制重渲（删源后条目数量可能不变，但内容变了）
+  async function refreshFeedsData(force) {
+    try {
+      const data = await fetchJSON('/api/feeds');
+      feedsList = data.feeds || [];
+    } catch (e) {
+      feedsList = [];
+    }
+    if (force) feedsSig = '';
+    renderFeedsPanel();
+  }
+
+  function initRssPanel() {
+    const addBtn2 = document.getElementById('rss-add-btn');
+    if (addBtn2) {
+      addBtn2.addEventListener('click', async () => {
+        const nameEl = document.getElementById('rss-name');
+        const urlEl = document.getElementById('rss-url');
+        const name = ((nameEl && nameEl.value) || '').trim();
+        const url = ((urlEl && urlEl.value) || '').trim();
+        if (!name || !url) { showToast('名称和地址都不能为空', 'err'); return; }
+        addBtn2.disabled = true;
+        try {
+          const r = await fetch('/api/feeds', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, url }),
+          });
+          const res = await r.json().catch(() => ({}));
+          if (res.ok) {
+            showToast('已添加订阅源: ' + name, 'ok');
+            if (nameEl) nameEl.value = '';
+            if (urlEl) urlEl.value = '';
+            await refreshFeedsData(true);
+            await refreshRss(); // 立即抓一次，卡片马上有内容
+          } else {
+            showToast('添加失败: ' + (res.error || '未知错误'), 'err');
+          }
+        } catch (e) {
+          showToast('添加失败: ' + e.message, 'err');
+        }
+        addBtn2.disabled = false;
+      });
+    }
+    // 已添加列表：标题展开/收起（持久化，与快捷方式列表同款交互）
+    const listToggle = document.getElementById('rss-list-toggle');
+    if (listToggle) {
+      const rssUl = document.getElementById('rss-list');
+      if (localStorage.getItem('workbench-fold-rsslist') === '1') {
+        listToggle.setAttribute('aria-expanded', 'false');
+        if (rssUl) rssUl.classList.add('collapsed');
+      }
+      listToggle.addEventListener('click', () => {
+        const collapsed = rssUl ? rssUl.classList.toggle('collapsed') : false;
+        listToggle.setAttribute('aria-expanded', String(!collapsed));
+        localStorage.setItem('workbench-fold-rsslist', collapsed ? '1' : '0');
+      });
+    }
+    refreshFeedsData();
+  }
+
   // ---- 初始化 ----
   async function init() {
     applyStyle();
     initShortcutPanel();
+    initRssPanel();
     try {
       const cfg = await fetchJSON('/api/buttons');
       if (cfg && cfg.title) titleEl.textContent = cfg.title;
@@ -1684,6 +1990,7 @@
     await refreshBalance();
     await refreshDidaToday();
     await refreshDidaFocus();
+    await refreshRss();
     updateRateBadge();
     setInterval(refreshButtons, 3000);
     setInterval(refreshLogs, 2000);
@@ -1692,6 +1999,7 @@
     setInterval(refreshBalance, 60000);
     setInterval(refreshDidaToday, 300000);
     setInterval(refreshDidaFocus, 300000);
+    setInterval(refreshRss, 600000); // RSS 源 10 分钟（服务端另有 15 分钟缓存兜底）
     // 现在时刻线每分钟刷新：任务随当前时间在「已过/未到」间滑动，线的位置与文案要跟着走
     setInterval(() => { renderSystemCard('sys-dida-today'); applyMasonry(); }, 60000);
     setInterval(updateRateBadge, 60000);

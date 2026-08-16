@@ -120,6 +120,121 @@ function saveBookmarks() {
   }
 }
 
+// ---- RSS 订阅源（信息卡：用户自配 RSS/Atom 源，持久化到 feeds.json）----
+const FEEDS_PATH = path.join(ROOT, 'feeds.json');
+const RSS_CACHE_MS = 15 * 60 * 1000; // 单源缓存 15 分钟（源不会变得更快，避免频繁抓取）
+const RSS_MAX_ITEMS = 8;             // 每源最多条数（卡片展示用，多了没意义）
+const RSS_MAX_FEEDS = 12;            // 最多订阅源数（防止配置爆炸）
+
+let rssFeeds = [];
+try {
+  if (fs.existsSync(FEEDS_PATH)) {
+    const raw = fs.readFileSync(FEEDS_PATH, 'utf8').replace(/^\uFEFF/, '');
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) rssFeeds = parsed;
+  }
+} catch (e) {
+  console.error('读取 feeds.json 失败:', e.message);
+}
+
+function saveFeeds() {
+  try {
+    fs.writeFileSync(FEEDS_PATH, JSON.stringify(rssFeeds, null, 2), 'utf8');
+  } catch (e) {
+    console.error('写入 feeds.json 失败:', e.message);
+  }
+}
+
+// 每源缓存：feedId -> { data, at }（抓取失败时兜底沿用上次成功数据，标记 stale）
+const rssFeedCache = new Map();
+
+// XML 实体解码（含数字字符引用）
+function decodeXmlEntities(s) {
+  return s
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(parseInt(d, 10)))
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+// 取 <tag>...</tag> 文本：优先 CDATA 内容，再解码实体、剥 HTML 标签（部分源标题内嵌 <b> 等）
+function xmlText(block, tag) {
+  const re = new RegExp('<' + tag + '(?:\\s[^>]*)?>([\\s\\S]*?)<\\/' + tag + '>', 'i');
+  const m = re.exec(block);
+  if (!m) return '';
+  let v = m[1].trim();
+  const cdata = /^<!\[CDATA\[([\s\S]*)\]\]>$/i.exec(v);
+  if (cdata) v = cdata[1];
+  v = decodeXmlEntities(v);
+  v = v.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+  return v;
+}
+
+// 极简 RSS 2.0 / Atom 解析（零依赖，覆盖绝大多数源；RSS 0.9x/RDF 的 <item> 结构同 RSS2 一并兼容）
+function parseFeedXml(xml) {
+  const items = [];
+  const push = (title, link, date) => {
+    const ts = date ? Date.parse(date) : NaN;
+    items.push({
+      title: (title || '(无标题)').slice(0, 160),
+      link: link || '',
+      ts: isFinite(ts) ? ts : null,
+      dateText: date || '',
+    });
+  };
+  if (/<feed[\s>]/i.test(xml) && /<entry[\s>]/i.test(xml)) {
+    // Atom：feed 标题取首个 <entry> 之前；link 优先 href 属性，回退文本形式
+    const headEnd = xml.search(/<entry[\s>]/i);
+    const feedTitle = xmlText(headEnd < 0 ? xml : xml.slice(0, headEnd), 'title');
+    const entries = xml.match(/<entry[\s>][\s\S]*?<\/entry>/gi) || [];
+    for (const e of entries) {
+      let link = /<link[^>]*href=["']([^"']+)["'][^>]*>/i.exec(e);
+      if (!link) link = /<link[^>]*>([\s\S]*?)<\/link>/i.exec(e);
+      push(xmlText(e, 'title'), link ? decodeXmlEntities(link[1]) : '', xmlText(e, 'updated') || xmlText(e, 'published'));
+    }
+    return { feedTitle, items: items.slice(0, RSS_MAX_ITEMS) };
+  }
+  // RSS 2.0 / RDF：<channel> 内、首个 <item> 之前是 feed 标题；item 的 link 为纯文本
+  const headEnd = xml.search(/<item[\s>]/i);
+  const feedTitle = xmlText(headEnd < 0 ? xml : xml.slice(0, headEnd), 'title');
+  const els = xml.match(/<item[\s>][\s\S]*?<\/item>/gi) || [];
+  for (const it of els) {
+    let link = xmlText(it, 'link');
+    if (!link) link = xmlText(it, 'guid'); // 少数源只有 guid 是链接
+    push(xmlText(it, 'title'), link, xmlText(it, 'pubDate') || xmlText(it, 'updated') || xmlText(it, 'date'));
+  }
+  return { feedTitle, items: items.slice(0, RSS_MAX_ITEMS) };
+}
+
+// 抓取单个源（缓存 → downloadUrl 抓取 → 解析；失败时沿用旧缓存标 stale，从未成功过才返回错误）
+async function fetchFeed(feed) {
+  const now = Date.now();
+  const hit = rssFeedCache.get(feed.id);
+  if (hit && now - hit.at < RSS_CACHE_MS) return hit.data;
+  let data;
+  try {
+    const buf = await downloadUrl(feed.url, 12000);
+    if (buf.length > 4 * 1024 * 1024) throw new Error('源内容过大（>4MB），拒绝解析');
+    const parsed = parseFeedXml(buf.toString('utf8'));
+    if (!parsed.items.length && !parsed.feedTitle) throw new Error('无法解析（不是 RSS/Atom 格式？）');
+    data = { ok: true, feedTitle: parsed.feedTitle || feed.name, items: parsed.items };
+  } catch (e) {
+    if (hit && hit.data && hit.data.ok) data = { ...hit.data, stale: true };
+    else data = { ok: false, error: e.message };
+  }
+  rssFeedCache.set(feed.id, { data, at: now });
+  return data;
+}
+
+async function getAllFeedsData() {
+  const out = [];
+  for (const f of rssFeeds) {
+    out.push({ id: f.id, name: f.name, url: f.url, ...(await fetchFeed(f)) });
+  }
+  return out;
+}
+
 // ---- 上次 push 时间持久化（服务重启后仍保留） ----
 let pushState = { lastPushAt: null };
 try {
@@ -840,8 +955,13 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1:' + PORT);
   const p = url.pathname;
 
-  // 请求日志：每次请求写入 stdout（workbench.log），便于排查"点了没反应"
-  console.log(`[${new Date().toLocaleTimeString()}] ${req.method} ${p}`);
+  // 请求日志：写入 stdout（workbench.log），便于排查"点了没反应"。
+  // GET /api/* 全是 2-5 秒级高频轮询（buttons/queue/logs 等），刷屏且让日志膨胀，
+  // 不记录；POST（按钮点击）与页面/静态文件加载照常全记——
+  // "有 POST 记录 = 请求到达了服务端"的排查口诀不变。
+  if (!(req.method === 'GET' && p.startsWith('/api/'))) {
+    console.log(`[${new Date().toLocaleTimeString()}] ${req.method} ${p}`);
+  }
 
   // 按钮列表（附端口状态 + 前端静态文件版本）
   if (p === '/api/buttons' && req.method === 'GET') {
@@ -949,6 +1069,54 @@ const server = http.createServer(async (req, res) => {
     if (bookmarks.length === before) return json(res, { ok: false, error: '书签不存在' }, 404);
     saveBookmarks();
     return json(res, { ok: true });
+  }
+
+  // RSS 订阅源列表（设置面板管理用）
+  if (p === '/api/feeds' && req.method === 'GET') {
+    return json(res, { feeds: rssFeeds.map((f) => ({ id: f.id, name: f.name, url: f.url })) });
+  }
+
+  // 新增 RSS 订阅源 {name, url}
+  if (p === '/api/feeds' && req.method === 'POST') {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    try {
+      const { name, url } = JSON.parse(body);
+      const clean = (url || '').trim();
+      const cleanName = (name || '').trim();
+      if (!cleanName || !clean) return json(res, { ok: false, error: '名称和地址都不能为空' }, 400);
+      if (!/^https?:\/\/\S+$/i.test(clean)) return json(res, { ok: false, error: '地址必须以 http:// 或 https:// 开头' }, 400);
+      if (rssFeeds.some((f) => f.url === clean)) return json(res, { ok: false, error: '该地址已添加过' }, 400);
+      if (rssFeeds.length >= RSS_MAX_FEEDS) return json(res, { ok: false, error: '最多 ' + RSS_MAX_FEEDS + ' 个订阅源' }, 400);
+      const item = {
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        name: cleanName.slice(0, 30),
+        url: clean.slice(0, 500),
+        createdAt: Date.now(),
+      };
+      rssFeeds.push(item);
+      saveFeeds();
+      return json(res, { ok: true, feed: item });
+    } catch (e) {
+      return json(res, { ok: false, error: '请求格式错误: ' + e.message }, 400);
+    }
+  }
+
+  // 删除 RSS 订阅源
+  if (p.startsWith('/api/feeds/') && req.method === 'DELETE') {
+    const id = decodeURIComponent(p.slice('/api/feeds/'.length));
+    const before = rssFeeds.length;
+    rssFeeds = rssFeeds.filter((f) => f.id !== id);
+    if (rssFeeds.length === before) return json(res, { ok: false, error: '订阅源不存在' }, 404);
+    rssFeedCache.delete(id);
+    saveFeeds();
+    return json(res, { ok: true });
+  }
+
+  // RSS 信息卡数据（全部源合并，含每源错误/过期标记）
+  if (p === '/api/rss' && req.method === 'GET') {
+    const feeds = await getAllFeedsData();
+    return json(res, { ok: true, feeds });
   }
 
   // Push 卡片：创建新对话并发送 push

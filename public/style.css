@@ -296,6 +296,30 @@ body.sidebar-collapsed .expand-sidebar {
   color: var(--text-2);
 }
 
+/* ---- 顶栏快速搜索（偏好可关：body[data-search="off"] 隐藏） ---- */
+.quick-search {
+  width: 200px;
+  padding: 5px 12px;
+  font-size: 12.5px;
+  font-family: var(--font-body);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  outline: none;
+  transition: border-color .12s ease, box-shadow .12s ease, width .15s ease;
+}
+
+.quick-search:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
+  width: 260px;
+}
+
+.quick-search::placeholder { color: var(--text-3); }
+
+body[data-search="off"] .quick-search { display: none; }
+
 /* ---- DeepSeek 峰谷定价时段指示 ---- */
 .rate-badge {
   display: inline-flex;
@@ -713,6 +737,72 @@ body[data-layout="split-center"] .buttons-grid .card:not(.stat-card) {
   font-size: 12px;
   color: var(--text-3);
   padding: 6px 8px;
+}
+
+/* RSS 订阅信息卡：每源一个小标题 + 最新条目行（宽卡半行，瀑布流自适应高度） */
+.rss-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.rss-feed-title {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  color: var(--text-3);
+  padding: 2px 8px 3px;
+  margin-top: 6px;
+  user-select: none;
+}
+
+.rss-list .rss-feed-title:first-child { margin-top: 0; }
+
+.rss-feed-title:hover { color: var(--accent-deep); }
+
+.rss-feed-title.err { color: var(--err); }
+.rss-feed-title.stale { opacity: .6; }
+
+.rss-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--text);
+  text-decoration: none;
+  -webkit-user-drag: none;
+  transition: background .12s ease, color .12s ease;
+}
+
+.rss-item:hover {
+  background: var(--surface-2);
+  color: var(--accent-deep);
+}
+
+.rss-item-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rss-item-date {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+}
+
+.rss-item.rss-empty {
+  color: var(--text-3);
+  font-size: 12px;
+  cursor: default;
 }
 
 /* 滴答今日任务卡：两列任务列表（全天 | 定时） */
@@ -2128,6 +2218,23 @@ body[data-theme="pixel"] .switch { border-radius: 0; }
 .sc-add-btn:disabled { opacity: .6; cursor: default; }
 .sc-list-title { font-size: 11px; color: var(--text-3); margin: 6px 0 4px; }
 .sc-list { list-style: none; margin: 0; padding: 0; max-height: 160px; overflow-y: auto; }
+
+/* RSS 面板提示行（arXiv 示例等） */
+.rss-tip {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+.rss-tip code {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 1px 4px;
+  word-break: break-all;
+}
 .sc-item {
   display: flex;
   flex-direction: column;

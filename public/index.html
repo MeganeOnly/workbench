@@ -29,6 +29,7 @@
       <h1 id="workbench-title">我的工作台</h1>
     </div>
     <div class="topbar-right">
+      <input class="quick-search" id="quick-search" type="text" placeholder="搜索按钮 / 书签（按 / 聚焦）" autocomplete="off" spellcheck="false" title="输入关键字实时过滤卡片与书签；回车执行第一个匹配（按钮=点击，书签=打开）；Esc 清空">
       <span class="rate-badge" id="rate-badge" title="DeepSeek API 峰谷定价：高峰 9-12 / 14-18（北京时间），其余为空闲时段（半价）">计算中...</span>
       <div class="server-status">
         <span class="dot" id="server-dot"></span>
@@ -199,6 +200,24 @@
                 <span class="switch-thumb"></span>
               </button>
             </div>
+            <div class="sp-row">
+              <div class="sp-row-text">
+                <span class="name">搜索框</span>
+                <span class="desc">顶栏快速搜索：过滤按钮/书签，回车执行</span>
+              </div>
+              <button class="switch" id="search-switch" role="switch" aria-checked="true" title="搜索框开关">
+                <span class="switch-thumb"></span>
+              </button>
+            </div>
+            <div class="sp-row">
+              <div class="sp-row-text">
+                <span class="name">RSS 订阅卡</span>
+                <span class="desc">显示订阅源最新条目（源在下方「RSS 订阅」区管理）</span>
+              </div>
+              <button class="switch" id="rss-switch" role="switch" aria-checked="true" title="RSS 订阅卡开关">
+                <span class="switch-thumb"></span>
+              </button>
+            </div>
             </div>
           </div>
           <div class="sp-section" data-collapsible="shortcut">
@@ -230,6 +249,27 @@
                 <span class="sc-caret">&#9656;</span>已添加的快捷方式
               </button>
               <ul class="sc-list" id="sc-list"></ul>
+            </div>
+          </div>
+          <div class="sp-section" data-collapsible="rss">
+            <button class="sp-title-row" type="button" aria-expanded="true">
+              <span class="sp-title-icon">&#9656;</span><span>RSS 订阅</span>
+            </button>
+            <div class="sp-content">
+              <div class="sc-field">
+                <label for="rss-name">名称（如：arXiv cs.AI）</label>
+                <input id="rss-name" type="text" placeholder="arXiv cs.AI" autocomplete="off">
+              </div>
+              <div class="sc-field">
+                <label for="rss-url">订阅地址（RSS / Atom URL）</label>
+                <input id="rss-url" type="text" placeholder="http://export.arxiv.org/rss/cs.AI" autocomplete="off">
+              </div>
+              <button type="button" class="sc-add-btn" id="rss-add-btn">添加订阅源</button>
+              <button type="button" class="sc-list-toggle" id="rss-list-toggle" aria-expanded="true" title="展开 / 收起">
+                <span class="sc-caret">&#9656;</span>已添加的订阅源
+              </button>
+              <ul class="sc-list" id="rss-list"></ul>
+              <div class="rss-tip">文献订阅示例：arXiv 分类源 <code>http://export.arxiv.org/rss/cs.AI</code>（把 cs.AI 换成你的方向）。</div>
             </div>
           </div>
           <div class="sp-foot">选择即时生效并自动保存，可随时切换回来。</div>

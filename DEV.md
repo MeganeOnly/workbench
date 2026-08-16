@@ -15,7 +15,7 @@
 3. **静态文件响应必须带 `Cache-Control: no-cache`**（server.js 已实现，勿移除）。否则浏览器缓存旧 JS，用户刷新也拿不到新代码，表现为"点了没反应"。
 4. **桌面应用按钮必须处理"已运行"场景**。Anki 是单实例：已在运行时 `start "" xxx.lnk` 不会弹新窗口，用户以为按钮坏了。正确做法（见 `launch-anki.bat`）：先 `tasklist` 检测进程 → 已运行则 `AppActivate` 激活窗口到前台，未运行才启动。
 5. **按钮点击必须有可见反馈**。普通按钮成功时前端不做任何提示 = 用户以为没反应。全局 toast（app.js `showToast` + style.css `#toast`）已实现，**新增任何按钮类型都必须保持 toast 反馈**。
-6. **服务端有全量请求日志**。`server.js` 对每个请求打印 `[时间] METHOD /path` 到 `workbench.log`。排查"点了没反应"**先查日志**：有 POST 记录 = 请求到达了；没有 = 浏览器端问题（缓存/页面未刷新）。
+6. **服务端有请求日志（POST / 页面加载全记，GET /api 轮询不记）**。`server.js` 把每次请求写入 `workbench.log`，但 **GET /api/\***（buttons/queue/logs 等每 2-5 秒的轮询）不记录，防止日志刷屏膨胀。排查"点了没反应"**先查日志**：有 POST 记录 = 请求到达了；没有 = 浏览器端问题（缓存/页面未刷新）。
 7. **改完必须按第 7 节清单端到端验证**，不能只改不测。
 8. **点击接线必须单一真源 `rec.current`**（app.js）。`ensureFuncCard` 的点击监听器与 `renderFuncCard` 的渲染赋值**必须共用一个对象属性**。曾因监听器读 `refs.current`、渲染写 `rec.current`（双属性不一致，`refs.current` 永不赋值）导致点击**静默失效**：零请求、零报错、无 toast，用户表现为"怎么点执行都没反应"。**改 app.js 卡片逻辑前先 grep `current` 确认读写一致**；改完跑 `node test-click.mjs`（回归测试，见第 2、7 节）。
 
@@ -37,14 +37,15 @@ workbench/
 ├── push-state.json      # 上次 push 时间（持久化；push 按钮 10 分钟锁定依据）
 ├── dida-state.json      # dida 卡片每日执行记录（持久化；"点过一次当天隐藏"依据）
 ├── bookmarks.json       # 书签数据（前端可增删，服务端持久化）
+├── feeds.json           # RSS 订阅源（设置面板自动增删，服务端持久化）
 ├── public/
-│   ├── index.html       # 页面骨架 + 「样式」设置面板（外观/布局/偏好）
+│   ├── index.html       # 页面骨架 + 「样式」设置面板（外观/布局/偏好/快捷方式/RSS 订阅）
 │   ├── style.css        # 全部样式：基础 + 9 套主题 body[data-theme="..."] + 3 套布局 body[data-layout="..."]
-│   └── app.js           # 前端逻辑：卡片 keyed 渲染、轮询、拖拽排序、执行按钮、书签、设置
+│   └── app.js           # 前端逻辑：卡片 keyed 渲染、轮询、拖拽排序、执行按钮、书签、搜索、RSS、设置
 ├── start-workbench.bat  # 一键重启：杀 3180 旧进程 → 隐藏启动 server.js → 等端口 → 打开浏览器
 ├── test-click.mjs       # 点击接线回归测试：无副作用（页面内 stub fetch），node test-click.mjs 运行
 ├── favicons/            # 书签小图标缓存（服务端自动生成，<domain>.ico）
-└── workbench.log        # 服务运行日志（重定向自 server.js 的 stdout/stderr）
+└── workbench.log        # 服务运行日志（重定向自 server.js 的 stdout/stderr；每次启动截断）
 ```
 
 ## 3. 运行与重启（重要）
@@ -108,8 +109,10 @@ spawn(full, { cwd, windowsHide: true, stdio: 'ignore', shell: true });
 5. 前端 dida 卡徽章：每日按钮显示「今日待办」，weekly 按钮显示「本周待办」；按钮文案为「执行」。
 
 ### 4.5 前端卡片系统（app.js）
-- 功能卡来自 `/api/buttons`（即 buttons.json）；内置信息卡在 `SYS_CARDS`（`sys-balance` 余额 / `sys-status` 状态 / `sys-bookmarks` 书签 / `sys-dida-today` 今日任务 / `sys-dida-focus` 专注；**Anki 队列数量已并入 push 卡**显示，不再有独立队列卡）。
-- keyed 渲染：`cardCache` 按 id 复用 DOM；卡片顺序、主题、布局、偏好开关都存在**浏览器 localStorage**（键：`workbench-card-order` / `workbench-theme` / `workbench-layout` / `workbench-sidebar` / `workbench-bignum` / `workbench-countup` / `workbench-icons` / `workbench-fold-*`），换浏览器或清缓存会重置。
+- 功能卡来自 `/api/buttons`（即 buttons.json）；内置信息卡在 `SYS_CARDS`（`sys-balance` 余额 / `sys-status` 状态 / `sys-bookmarks` 书签 / `sys-dida-today` 今日任务 / `sys-dida-focus` 专注 / `sys-rss` RSS 订阅；**Anki 队列数量已并入 push 卡**显示，不再有独立队列卡）。
+- keyed 渲染：`cardCache` 按 id 复用 DOM；卡片顺序、主题、布局、偏好开关都存在**浏览器 localStorage**（键：`workbench-card-order` / `workbench-theme` / `workbench-layout` / `workbench-sidebar` / `workbench-bignum` / `workbench-countup` / `workbench-icons` / `workbench-search` / `workbench-rss` / `workbench-fold-*`），换浏览器或清缓存会重置。
+- **顶栏快速搜索**：`searchQ` 状态（输入即小写化）。`renderGrid` 第二循环里 `display:none` 隐藏不匹配卡（不卸载 DOM，清空即恢复）；书签卡/侧栏只显示命中书签（`bmMatches`，名称+网址匹配）；回车 `runFirstSearchMatch` 按卡片顺序执行第一个匹配（功能卡 `runButton` / 书签 `openExternal`）；`/` 键聚焦。偏好「搜索框」= `body[data-search="off"]` 隐藏输入框（CSS 控制）。
+- **RSS 订阅卡 `sys-rss`**：偏好「RSS 订阅卡」off 时 `renderGrid` 跳过渲染并从 DOM 移除（与 dida 不可见卡同款处理），`refreshRss` 也在 off 时直接 return（不抓取）。数据链路：`GET /api/rss`（服务端 15 分钟缓存/源，抓取失败沿用旧缓存标 `stale`）→ `renderRssList`（每源小标题 + 条目链接）。订阅源增删走 `/api/feeds`（持久化 `feeds.json`，设置面板「RSS 订阅」区，交互与快捷方式区同款）。
 - 卡片尺寸：`large` 半行 4 列 / `wide`、`small` 四分之一行 2 列（2026-08-14 起收紧：wide/默认档原为半行 4 列、large 原为整行 8 列，去掉卡片描述后内容精简不再需要宽卡，见第 8 节）；小屏自动降列。
 - **点击接线（铁律，勿破坏）**：`ensureFuncCard` 内 `rec` 先于监听器声明，**唯一执行入口是 run-btn 按钮监听器**（读 `rec.current`；卡片主体/标题点击不执行——用户要求"只有按到按钮才启动"，整卡可点已移除）；`renderFuncCard` 只写 `rec.current`——**单一真源，禁止再引入 `refs.current` 之类的第二属性**。曾因读写属性不一致导致点击静默失效（零请求零报错）。改完此逻辑必须跑 `node test-click.mjs`。
 - **拖拽实现（以代码为准）**：指针事件自实现（`mousedown/mousemove/mouseup` + 幽灵跟随 + 落点高亮），**仅 ⠿ 手柄（`.drag-hint`）可拖**；卡片其余区域不进入拖拽判定。**执行入口只有 run-btn 按钮**（卡片主体/标题点击不执行；曾实现"整卡可点"，用户反馈范围太宽已移除，2026-08-14）。历史教训：曾因"整卡可拖 + 6px 位移阈值"把正常点击误判为拖拽、`suppressClick` 吞掉 click，导致按钮"点了没反应"，已收敛回手柄区。若再改拖拽，同步更新本节。
@@ -142,6 +145,10 @@ spawn(full, { cwd, windowsHide: true, stdio: 'ignore', shell: true });
 | POST | `/api/bookmarks` | 新增书签 `{name, url}` |
 | POST | `/api/bookmarks/reorder` | 书签排序 `{ids:[...]}`（侧栏拖拽后提交完整顺序，持久化到 bookmarks.json） |
 | DELETE | `/api/bookmarks/<id>` | 删除书签 |
+| GET | `/api/feeds` | RSS 订阅源列表（设置面板管理用） |
+| POST | `/api/feeds` | 新增订阅源 `{name, url}`（校验 http(s)、查重、上限 12 个；持久化 feeds.json） |
+| DELETE | `/api/feeds/<id>` | 删除订阅源 |
+| GET | `/api/rss` | RSS 信息卡数据（全部源合并；每源 15 分钟缓存，失败沿用旧缓存标 stale） |
 | GET | `/api/favicon?domain=..&url=..` | 书签小图标（本地缓存 → 站点 `/favicon.ico` → Bing 兜底；产物存 `favicons/`） |
 | GET | `/api/logs` | 运行记录 |
 | GET | 其他 | `public/` 静态文件 |
@@ -209,6 +216,7 @@ spawn(full, { cwd, windowsHide: true, stdio: 'ignore', shell: true });
 
 | 日期 | 改动 |
 |---|---|
+| 2026-08-16 | **新增顶栏快速搜索 + RSS 订阅卡（均可偏好关闭）+ 仓库初始化 git**：①**搜索框**（`#quick-search`，顶栏）——输入实时过滤卡片墙与侧栏书签（`searchQ` 小写态；`renderGrid` 第二循环 `display:none` 隐藏不匹配卡，不卸载 DOM；书签卡/侧栏由 `bmMatches` 只显示命中项），回车按卡片顺序执行第一个匹配（功能卡 `runButton` / 书签 `openExternal`），Esc 清空，`/` 键聚焦；偏好「搜索框」开关（`workbench-search` / `body[data-search="off"]` 纯 CSS 隐藏）。②**RSS 订阅卡**（`sys-rss`，wide，≡ 图标）——服务端零依赖 RSS2/Atom/RDF 解析（`parseFeedXml`：CDATA/实体/数字字符引用解码、Atom href 优先、RSS2 guid 兜底、标题剥 HTML 标签截 160 字），`downloadUrl` 抓取（12s 超时、4MB 上限、跟重定向），每源 15 分钟缓存、失败沿用旧缓存标 `stale`、每源最多 8 条、最多 12 源；API：`GET/POST /api/feeds`、`DELETE /api/feeds/<id>`、`GET /api/rss`，持久化 `feeds.json`；前端 `renderRssList`（每源小标题可点开源站 + 条目链接带日期），10 分钟轮询，偏好「RSS 订阅卡」off 时不渲染不抓取（与 dida 不可见卡同款 DOM 移除处理）；设置面板新增「RSS 订阅」可折叠区（增删源，交互与快捷方式区同款）。③**日志降噪**：请求日志不再记录 `GET /api/*`（2-5 秒级轮询刷屏），POST 与页面加载照常全记——"有 POST 记录 = 请求到达"口诀不变。④**git 初始化**：`.gitignore` 排除日志/个人状态文件（bookmarks/dida-state/push-state/feeds）/图标缓存/design-references。验证：`test-click.mjs` 13 项全 PASS；无头 Edge UI 实测 13 项全 PASS（搜索过滤 anki/weibo、清空恢复、RSS 源标题渲染、两个偏好开关关开往返、管理面板 arXiv 在列、无 JS 异常）；真实 RSS 端到端：arXiv（今日空源，skipDays 周日正常）、Hacker News RSS2 8 条、GitHub commits Atom 8 条均解析正确（HN/GitHub 测试源已删，保留 arXiv 作示例）；日志中 `GET /api/` 计数为 0。另清理：根目录过期的 workbench.log（错误目录启动残留）、两个乱码名空目录（GBK 编码事故）、两个 one-off 测试脚本 |
 | 2026-08-16 | **新增周报 dida 按钮（`dida-weekly`）+ dida 卡片 weekly 每周模式**：①buttons.json 新增「周报」（wide，teal）：`kind:"dida"` + `prompt:"该周报了"`（触发 dida-ai 场景六 GTD 周回顾）+ `weekly:true` + `weekday:0`（周日）+ `showAfter:"22:30"`——**每周日 22:30 后出现，点过一次本周隐藏，下周日自动恢复**（与每日按钮"每天一次"同构，周期改为每周）；②server.js：`didaVisible` 增加 weekly 分支（非指定星期隐藏 / `weekAnchorStr` 本周锚点=本周日日期作"本周已点过"判定 / showAfter 拦截），`runDida` 成功后 weekly 按钮记录本周锚点日期（每日按钮仍记当天日期），抽公共 `fmtDate(d)`；③app.js：`CARD_ICONS` 加 `dida-weekly:'周'`，dida 卡徽章 weekly 按钮显示「本周待办」（每日仍「今日待办」）。验证：模拟测试 16 项全 PASS（周一/周六隐藏、周日 22:29 隐藏 22:30 可见 23:59 可见、点过后隐藏、下周日恢复、锚点同周稳定跨周变化、每日模式回归）；真实 API 拒绝路径（未到点返回 500 + "未到显示时间（周日 22:30 后出现）"且不写 dida-state）；`test-click.mjs` 11 项全 PASS（三个 dida 卡当前不可见被脚本按设计跳过） |
 | 2026-08-15 | **快捷方式"已运行即置顶"统一增强 + 图标加大 + 运行记录长文本截断 + 滴答专注卡可点击跳转**：①`launch-app.ps1` 激活分支升级——已运行应用不再只 `AppActivate`（最小化窗口不恢复、前台锁可能静默失败），改为优先取有主窗口的进程 → `Add-Type` P/Invoke `ShowWindowAsync(SW_RESTORE)` 恢复最小化 + `SetForegroundWindow` 置顶，再 `SendKeys('%')`（Alt 键解除前台锁）后 `AppActivate($p.Id)` 兜底（无主窗口的托盘应用仍可激活）；`launch-anki.bat` 激活分支改为委托 `launch-app.ps1` 传 Anki.lnk（与全部快捷方式统一行为）；②快捷方式卡应用图标 20px→**28px**（`.card.shortcut-card .card-icon img`，字符回退 16→24px）——只放大图标不改变卡片尺寸；③运行记录样式：`.name`/`.status` 加 `flex:1/min-width:0/ellipsis` 截断、`.status` 限宽 55%、`.time` 防收缩——修掉"出错: 无法连接 dsh web (3080): connect ECONNREFUSED…"这类长错误把整行撑爆的丑样式（仅样式，不解决 dida 报错本身），app.js 给 name/status 加 `title` 悬浮显示完整文本；④`sys-dida-focus`（滴答专注）卡点击跳转：优先复用「滴答清单」快捷方式按钮（`runButton`，未运行启动/已运行置顶 + toast），按钮不存在时回退 `openExternal('https://www.dida365.com/webapp/')`。`launch-app.ps1`/`launch-anki.bat` 保持纯 ASCII（实测 0 非 ASCII 字节）；`test-click.mjs` 全 PASS |
 | 2026-08-15 | **快捷方式图标改为完整彩色大图标（修复"缺颜色/变灰"）**：旧方案 `Icon.ExtractAssociatedIcon` 只取 32×32（很多应用该尺寸是简化/单色版）。重写 `extract-app-icon.ps1`：**直接读 exe 的 PE 图标资源**（`LoadLibraryEx(AS_DATAFILE)` + `EnumResourceNames`/`FindResource` 枚举 RT_GROUP_ICON → 各 RT_ICON），把全部尺寸（含 256×256 彩色 PNG/BMP）按尺寸降序写成多尺寸 ICO（Chrome 自动选 256 渲染）；**目标被占用（应用正在运行）时复制临时副本再提取**（实测 Anki 运行中直接读失败、副本成功）；仍失败才兜底 `ExtractAssociatedIcon`。注意点：GRPICONDIRENTRY 是 **14 字节**（wID 在 +12，非 16 字节布局）；`SHGetImageList`/`PrivateExtractIcons` 在本机不可用（E_NOINTERFACE/无导出）。已重提取 5 个图标：anki 103KB/256、reasonix 42KB/256、zotero 44KB/256、obsidian 52KB/256、sm18 32KB/64（SuperMemo 18 老软件资源最大 64，无法再大）。无头实测 5 卡图标 naturalWidth 256/64 全部加载；`test-click.mjs` 11 项全 PASS。**注意：icons 不在版本自检范围，需手动 Ctrl+F5 刷新才看到新图标** |
