@@ -1,0 +1,7 @@
+{
+  "ankiQueuePath": "D:\\path\\to\\anki_to_hermes.json",
+  "credentialsPath": "C:\\Users\\you\\.dsh\\.credentials.yaml",
+  "didaMcpConfig": "C:\\Users\\you\\.dsh\\profiles\\web\\cordis.patch.yml",
+  "pushCwd": "D:\\path\\to\\anki-harness-workdir",
+  "didaDefaultCwd": "D:\\your\\workspace"
+}

@@ -1,6 +1,13 @@
 # 运行日志
 *.log
 
+# 个人配置与本机数据（仓库提供 *.example.json 模板）
+buttons.json
+config.json
+
+# 内部开发手册（含个人环境路径，仅本地使用）
+DEV.md
+
 # 临时调试脚本（AI 会话中的一次性产物，随用随删随建）
 .check-*.ps1
 .test-*.ps1

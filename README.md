@@ -1,23 +1,38 @@
 # 我的工作台（Workbench）
 
-本地网页版工作台：把常用操作做成按钮，点一下即执行。
-
-> 给 AI 助手 / 开发者：修改本项目的**权威流程与架构说明**见同目录 [DEV.md](DEV.md)（按钮配置、重启、验证、易错点），修改前必读。用户可能在任何新的对话中提出功能需求。
+本地网页版工作台：把常用操作做成按钮，点一下即执行。零依赖（纯 Node 内置模块 + 原生前端，无构建步骤），仅监听本机。
 
 - 访问地址：`http://127.0.0.1:3180`（仅本机可访问）
 - 启动方式：双击 `start-workbench.bat`，会自动清理旧进程、后台启动服务并打开浏览器
+- 快速上手：复制 `buttons.example.json` 改名为 `buttons.json`，按需改成你自己的程序路径即可（所有按钮纯配置驱动，无需改代码）；涉及本机路径的可选配置见下方「个人配置」
 
-## 当前按钮
+## 个人配置（config.json，可选）
+
+部分功能依赖本机路径（凭据文件、工作目录等）。把这些路径写进 `config.json`（参考 `config.example.json`，该文件已被 .gitignore 排除，不会误提交）：
+
+| 键 | 作用 | 不配置时的表现 |
+|---|---|---|
+| `ankiQueuePath` | Anki 待推送队列 JSON 路径 | Push 卡显示"队列文件不存在" |
+| `credentialsPath` | 含 `DEEPSEEK_API_KEY` 的 yaml 路径 | 余额卡显示"未找到 DEEPSEEK_API_KEY" |
+| `didaMcpConfig` | 滴答清单 MCP 的 Bearer token 所在配置 | 今日任务/专注卡获取失败 |
+| `pushCwd` | Push 按钮新建 DSH 对话的工作目录 | 回退到 `didaDefaultCwd` |
+| `didaDefaultCwd` | dida 按钮新建 DSH 对话的工作目录 | 回退到用户主目录 |
+
+不配置任何一项也能启动，对应功能优雅降级（显示原因，不影响其他卡片）。
+
+## 当前按钮（示例配置）
 
 | 按钮 | 行为 |
 |---|---|
-| DSH 服务（toggle） | 一个按钮：DSH 停止时显示绿色"启动 DSH"；运行中显示红色"停止 DSH"，点击自动切换 |
-| Push 队列 | 卡片上实时显示 Anki 队列待推送数量（待推送 X / 共 Y 条，有待推送时高亮）；点击在 Anki 工作目录新建一个 DSH 对话并自动发送 push，然后打开 DSH 页面 |
-| Anki | 通过开始菜单快捷方式（`Anki.lnk`）打开 Anki；已在运行则激活窗口到前台。徽章实时显示「运行中/已停止」（按进程检测） |
-| SM18 | 打开 `F:\SM学习分享, 有能力请支持正版\sm18.exe`（SuperMemo 18）；已在运行则激活窗口到前台。徽章实时显示「运行中/已停止」（按进程检测） |
-| 整理 Inbox（dida） | 每晚 21:00 后出现：在 `F:\AllWorkSpace` 新建 DSH 对话并自动发送「整理inbox」，然后打开 DSH 页面；点过一次当天隐藏 |
-| 安排今日任务（dida） | 全天可见：在 `F:\AllWorkSpace` 新建 DSH 对话并自动发送「安排今日任务」，然后打开 DSH 页面；点过一次当天隐藏 |
-| 周报（dida） | 每周日 22:30 后出现：在 `F:\AllWorkSpace` 新建 DSH 对话并自动发送「该周报了」，然后打开 DSH 页面；点过一次本周隐藏，下周日自动恢复 |
+| 服务开关（toggle 示例） | 一个按钮：服务停止时显示绿色"启动"；运行中显示红色"停止"，点击自动切换（按端口状态判断） |
+| Push 队列 | 卡片上实时显示 Anki 队列待推送数量（待推送 X / 共 Y 条，有待推送时高亮）；点击新建一个 DSH 对话并自动发送 push，然后打开 DSH 页面 |
+| Anki | 通过开始菜单快捷方式打开 Anki；已在运行则激活窗口到前台。徽章实时显示「运行中/已停止」（按进程检测） |
+| SuperMemo 18 | 打开 sm18.exe；已在运行则激活窗口到前台。徽章实时显示「运行中/已停止」（按进程检测） |
+| 整理 Inbox（dida） | 每晚 21:00 后出现：新建 DSH 对话并自动发送「整理inbox」，然后打开 DSH 页面；点过一次当天隐藏 |
+| 安排今日任务（dida） | 全天可见：新建 DSH 对话并自动发送「安排今日任务」，然后打开 DSH 页面；点过一次当天隐藏 |
+| 周报（dida） | 每周日 22:30 后出现：新建 DSH 对话并自动发送「该周报了」，然后打开 DSH 页面；点过一次本周隐藏，下周日自动恢复 |
+
+> 以上是 `buttons.example.json` 里的示例；你自己的按钮放在 `buttons.json`（从示例复制一份改名即可）。
 
 > **自动添加快捷方式**：样式面板「快捷方式」区——填程序路径（.exe / .lnk）点「添加按钮」即自动生成卡片（自动提取软件图标、自动配"未运行则启动 / 已运行则激活"），无需手改配置；已添加列表可随时删除。全程不消耗 AI token。
 
@@ -90,7 +105,7 @@
 
 点击"Push 卡片"后，工作台通过 dsh web 的本地 API（127.0.0.1:3080）执行两步：
 
-1. `session.create` — 在 `F:\Anki - DeepSeek -Harness` 目录创建一个全新对话
+1. `session.create` — 在 `config.json` 的 `pushCwd` 目录创建一个全新对话
 2. `session.prompt` — 向该对话发送 `push`，触发 anki-card-push skill 流程
 
 完成后自动打开 DSH 页面，你会在会话列表顶部看到最新创建的 push 对话（状态为执行中）。每次点击都是全新对话，天然满足"一个对话最多三次、多了换新"的需求——每次 push 都是干净的上下文。
@@ -121,6 +136,7 @@
 - `size`：可选，卡片尺寸 `large` / `wide` / `small`，默认 `wide`
 - `command` / `args`：要执行的命令。执行 .bat 一般用 `cmd.exe /c call "..."`，窗口自动隐藏
 - `port`：可选，填端口号后按钮会实时显示该端口"运行中/已停止"
+- `process`：可选，填进程名后按钮会实时显示该程序"运行中/已停止"（前缀匹配，实际进程名可带后缀；「快捷方式」面板添加 .exe/.lnk 时自动配置，.lnk 会解析出真实目标进程，如滴答清单 → `TickTick.exe`）
 - `color`：按钮颜色，任意十六进制色值
 
 ### 切换按钮（toggle，按状态变色）
@@ -162,19 +178,37 @@
 ```
 workbench/
 ├── server.js            # 本地服务（端口 3180），零依赖 Node 实现
-├── buttons.json         # 按钮配置（唯一需要编辑的文件）
-├── feeds.json           # RSS 订阅源（设置面板自动增删，自动生成）
+├── buttons.example.json # 按钮配置模板（复制为 buttons.json 后按需修改）
+├── config.example.json  # 个人环境配置模板（复制为 config.json，可选）
 ├── public/              # 前端页面
 │   ├── index.html
 │   ├── style.css
 │   └── app.js
+├── launch-app.ps1       # 通用智能启动器：.exe/.lnk 通吃，未运行启动/已运行激活前台
 ├── start-workbench.bat  # 一键启动脚本
-├── test-click.mjs       # 点击接线回归测试（node test-click.mjs，无副作用）
-└── workbench.log        # 服务日志（启动后生成）
+└── test-click.mjs       # 点击接线回归测试（node test-click.mjs，无副作用）
 ```
+
+`buttons.json` / `config.json` / `feeds.json`（RSS 源）/ `bookmarks.json` 等运行时数据均在首次使用时自动生成，且已被 .gitignore 排除。
+
+## 开发说明（给 AI 助手 / 想改代码的人）
+
+本项目由 AI 助手辅助迭代开发，踩过的坑浓缩成几条铁律：
+
+- **bat 文件必须纯 ASCII**（注释写英文）：cmd.exe 按系统 OEM 代码页解析批处理，UTF-8 中文注释会吞掉换行符导致命令错乱甚至挂起。
+- **执行命令用「字符串拼接 + `spawn(shell: true)`」**，不能用参数数组形式：数组形式会对含引号参数二次转义，cmd 无法解析（表现为按钮无反应、退出码 1）。
+- **按钮点击必须有可见反馈**（全局 toast 已实现）；新增按钮类型必须保持。
+- **前端点击接线单一真源 `rec.current`**：点击监听器与渲染赋值必须共用同一对象属性，曾因读写两个不同属性导致点击静默失效（零请求零报错）。改卡片逻辑后必须跑 `node test-click.mjs`（无头浏览器回归测试）。
+- **静态文件响应带 `Cache-Control: no-cache`**；`/api/buttons` 返回前端文件 MD5 版本号，页面轮询发现版本变化自动 reload——根治"改了代码但用户停在旧标签页"。
+- **打开外部链接用 `openExternal(url)`**（新标签页优先、被拦截回退当前页跳转），禁止直接 `window.open`。
+- **改 `buttons.json` / `public/` 静态文件刷新页面即生效**（配置 1 秒 TTL 自动重载）；只有改 `server.js` 才需重启服务。
 
 ## 说明
 
 - 工作台服务仅监听 `127.0.0.1`，不会对外网开放。
 - 手动启动服务：在 `workbench` 目录执行 `node server.js` 即可。
 - 运行记录仅保存在内存中，工作台服务重启后清空。
+
+## License
+
+[MIT](LICENSE)

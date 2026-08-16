@@ -38,29 +38,32 @@ if ($Target -like '*.lnk') {
 
 # P/Invoke helpers. Compiled once into %TEMP% and cached across runs:
 # Add-Type from source costs ~0.5 s on every click (visable lag), loading
-# the cached DLL is nearly free. If a concurrent first run already holds
-# the DLL locked, we keep our own private copy instead of failing.
+# the cached DLL is nearly free. QUIRK: the .NET loader CACHES failed
+# LoadFrom results per path -- if LoadFrom($dll) threw once (cache file
+# deleted), a later LoadFrom($dll) fails again even after the file is
+# recreated. So we always compile to a private $PID-suffixed path, load
+# THAT (never failed before), and only then publish it as the shared DLL.
 function Load-WBWin32 {
     $dll = Join-Path $env:TEMP 'workbench-wbwin32.dll'
-    try { return [Reflection.Assembly]::LoadFrom($dll) }
-    catch {
-        $src = @'
+    if (Test-Path $dll) {
+        try { return [Reflection.Assembly]::LoadFrom($dll) } catch { }
+    }
+    $src = @'
 using System;
 using System.Runtime.InteropServices;
 public static class WBWin32 {
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
-    [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 }
 '@
-        $tmp = Join-Path $env:TEMP ("workbench-wbwin32-$PID.dll")
-        Add-Type -TypeDefinition $src -OutputAssembly $tmp
-        try { Move-Item -Force $tmp $dll } catch { $dll = $tmp }
-        return [Reflection.Assembly]::LoadFrom($dll)
-    }
+    $tmp = Join-Path $env:TEMP ("workbench-wbwin32-$PID.dll")
+    Add-Type -TypeDefinition $src -OutputAssembly $tmp
+    $asm = [Reflection.Assembly]::LoadFrom($tmp)
+    try { Move-Item -Force $tmp $dll } catch { }
+    return $asm
 }
 
 if ($real -like '*.exe') {
@@ -83,38 +86,34 @@ if ($real -like '*.exe') {
             # SW_RESTORE = 9 only when minimized (unconditional restore would
             # un-maximize maximized windows). Synchronous ShowWindow: the
             # async variant was observed to leave the window activated but
-            # still minimized (restore posted before activation got dropped).
+            # still minimized.
             if ([WBWin32]::IsIconic($h)) {
                 [WBWin32]::ShowWindow($h, 9) | Out-Null
             }
             # Foreground-lock workaround: synthesize an ALT press AROUND the
             # call so this thread counts as "received the last input event".
             [WBWin32]::keybd_event(0x12, 0x38, 0, [UIntPtr]::Zero)
-            [WBWin32]::SetForegroundWindow($h) | Out-Null
+            $fw = [WBWin32]::SetForegroundWindow($h)
             [WBWin32]::keybd_event(0x12, 0x38, 2, [UIntPtr]::Zero)
-            # Success = target is foreground AND not minimized. Some apps
-            # drop the pre-activation restore while minimized in the
-            # background -> retry the restore once AFTER activation.
-            $ok = $false
-            foreach ($i in 1..8) {
-                if (([WBWin32]::GetForegroundWindow() -eq $h) -and (-not [WBWin32]::IsIconic($h))) { $ok = $true; break }
-                Start-Sleep -Milliseconds 50
-            }
-            if (-not $ok -and [WBWin32]::IsIconic($h)) {
+            # Trust the API verdict: if the grant succeeded we are done, even
+            # if the user types afterwards and takes focus back -- we must
+            # NOT relaunch in that case (would open duplicate windows).
+            if ($fw -or ([WBWin32]::GetForegroundWindow() -eq $h)) { exit 0 }
+            # Rare: pre-activation restore dropped while minimized -> retry
+            # the restore once AFTER activation.
+            if ([WBWin32]::IsIconic($h)) {
                 [WBWin32]::ShowWindow($h, 9) | Out-Null
-                foreach ($i in 1..4) {
-                    if (([WBWin32]::GetForegroundWindow() -eq $h) -and (-not [WBWin32]::IsIconic($h))) { $ok = $true; break }
-                    Start-Sleep -Milliseconds 50
-                }
+                if ([WBWin32]::SetForegroundWindow($h)) { exit 0 }
             }
-            if ($ok) { exit 0 }
+            # Second chance: WScript AppActivate uses its own activation
+            # path and occasionally succeeds where SFW was refused.
+            $w = New-Object -ComObject WScript.Shell
+            try { $null = $w.SendKeys('%') } catch { }
+            if ($w.AppActivate($p.Id)) { exit 0 }
         }
-        # Fallback: WScript AppActivate (also covers tray-only apps).
-        $w = New-Object -ComObject WScript.Shell
-        try { $null = $w.SendKeys('%') } catch { }
-        if ($w.AppActivate($p.Id)) { exit 0 }
-        # Activation failed (typical: window hidden to tray, nothing to
-        # raise). Relaunch once: single-instance apps surface their existing
+        # No window handle to raise (typical: minimized to tray) or all
+        # activation attempts failed. Relaunch once: single-instance apps
+        # (Obsidian / TickTick / Zotero / Anki ...) surface their existing
         # window on a second launch. -NoRelaunch opts out (multi-instance).
         if (-not $NoRelaunch) {
             Start-Process -FilePath $Target

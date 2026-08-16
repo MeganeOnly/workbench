@@ -39,18 +39,32 @@ const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const CONFIG_FILE = path.join(ROOT, 'buttons.json');
 
+// ---- 个人环境配置（config.json，已被 .gitignore 排除；仓库带 config.example.json 模板）----
+// 所有与本机强相关的路径集中在此；未配置的项回退到通用默认值，对应功能显示"未配置/
+// 未找到"而不是崩溃——fresh clone 不写 config.json 也能跑起来。
+let USER_CFG = {};
+try {
+  const raw = fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8').replace(/^\uFEFF/, '');
+  USER_CFG = JSON.parse(raw);
+} catch (e) { /* 无 config.json = 全默认，开箱即用 */ }
+function cfg(key, fallback) {
+  const v = USER_CFG && USER_CFG[key];
+  return (typeof v === 'string' && v) ? v : fallback;
+}
+
 // ---- dsh web API 配置 ----
 const DSH_WEB_URL = 'http://127.0.0.1:3080';
 
-// ---- Anki 队列配置（权威路径，与 batch_push.py 一致） ----
-const ANKI_QUEUE_PATH = 'E:\\HERMES SKILLS\\anki_to_hermes.json';
+// ---- Anki 队列配置（ankiQueuePath：与 batch_push.py 输出一致，在 config.json 配置） ----
+const ANKI_QUEUE_PATH = cfg('ankiQueuePath', path.join(ROOT, 'anki-queue.json'));
 const PUSH_STATE_PATH = path.join(ROOT, 'push-state.json');
 const BOOKMARKS_PATH = path.join(ROOT, 'bookmarks.json');
-const CREDENTIALS_PATH = 'F:\\\\.dsh\\\\.credentials.yaml';
+const CREDENTIALS_PATH = cfg('credentialsPath', ''); // DeepSeek API Key 所在 yaml；未配置则余额卡提示"未找到"
 
 // ---- dida 卡片配置 ----
 const DIDA_STATE_PATH = path.join(ROOT, 'dida-state.json'); // 每日执行记录（卡片"点过一次当天隐藏"依据）
-const DIDA_DEFAULT_CWD = 'F:\\AllWorkSpace'; // 新建 DSH 对话的工作目录（按钮可配 cwd 覆盖）
+// 新建 DSH 对话的工作目录（按钮可配 cwd 覆盖；config.json 的 didaDefaultCwd）
+const DIDA_DEFAULT_CWD = cfg('didaDefaultCwd', process.env.USERPROFILE || '.');
 
 // ---- DeepSeek 余额查询（60 秒缓存，避免频繁请求） ----
 let balanceCache = { data: null, at: 0 };
@@ -426,6 +440,27 @@ function extractAppIcon(target, outIco) {
   });
 }
 
+// 解析 .lnk 快捷方式的 TargetPath（供徽章做进程检测；UWP 等解析不出的返回 null）
+// 路径经环境变量传入、输出强制 UTF-8：中文路径（滴答清单等）经命令行参数/默认
+// 代码页往返都会乱码，env + OutputEncoding 双向都稳。
+function resolveLnkTarget(target) {
+  return new Promise((resolve) => {
+    const ps = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const script = '[Console]::OutputEncoding=[Text.Encoding]::UTF8; Write-Output (New-Object -ComObject WScript.Shell).CreateShortcut($env:WB_LNK).TargetPath';
+    const child = spawn(ps, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+      windowsHide: true,
+      env: Object.assign({}, process.env, { WB_LNK: target }),
+    });
+    let out = '';
+    child.stdout.on('data', (d) => { out += d.toString('utf8'); });
+    child.on('error', () => resolve(null));
+    child.on('close', () => {
+      const t = out.trim();
+      resolve(t || null);
+    });
+  });
+}
+
 // ---- 前端静态文件版本（MD5，用于页面自检自动刷新）----
 // 前端在 /api/buttons 里取到 version，与自身加载时的版本比对：
 // 不一致说明页面代码已更新，自动 reload，避免用户停留在旧 JS 上（"点了没反应"的根源之一）。
@@ -458,15 +493,37 @@ function isPortListening(port) {
 }
 
 // ---- 工具：进程是否在运行（桌面应用按钮的状态徽章，如 Anki） ----
-const TASKLIST = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tasklist.exe');
-function isProcessRunning(name) {
+// 一次 tasklist 全量快照缓存 1 秒：一轮 /api/buttons 里多个进程按钮共用，
+// 不再每个按钮各起一个 tasklist。cmd 里先 chcp 65001：tasklist 输出跟随
+// 控制台代码页（默认 GBK），中文进程名（滴答清单等）必须切 UTF-8 才能比对。
+// 前缀匹配与 launch-app.ps1 的 Get-Process 通配保持一致：实际进程名可能带
+// 后缀（如 Reasonix.exe 运行时叫 reasonix-desktop.exe），精确匹配会永远
+// 误报"已停止"，进而出现"徽章显示没运行、点击却只是激活不启动"的矛盾。
+let procSnapshot = { at: 0, names: [] };
+
+function getProcessNames() {
   return new Promise((resolve) => {
-    const child = spawn(TASKLIST, ['/FI', 'IMAGENAME eq ' + name, '/NH'], { windowsHide: true });
+    if (Date.now() - procSnapshot.at < 1000) return resolve(procSnapshot.names);
+    const child = spawn('cmd.exe', ['/d', '/c', 'chcp 65001 >nul & tasklist /fo csv /nh'], { windowsHide: true });
     let out = '';
     child.stdout.on('data', (d) => { out += d.toString('utf8'); });
-    child.on('error', () => resolve(false));
-    child.on('close', () => resolve(out.toLowerCase().includes(name.toLowerCase())));
+    child.on('error', () => resolve(procSnapshot.names));
+    child.on('close', () => {
+      const names = [];
+      for (const line of out.split(/\r?\n/)) {
+        const m = /^"(.+?\.exe)"/i.exec(line.trim());
+        if (m) names.push(m[1].slice(0, -4).toLowerCase());
+      }
+      procSnapshot = { at: Date.now(), names };
+      resolve(names);
+    });
   });
+}
+
+function isProcessRunning(name) {
+  if (!name) return Promise.resolve(null);
+  const want = String(name).toLowerCase().replace(/\.exe$/, '');
+  return getProcessNames().then((names) => names.some((n) => n.startsWith(want)));
 }
 
 // ---- 书签小图标（favicon）代理：本地缓存 → 站点直取 → Bing 兜底 ----
@@ -554,7 +611,7 @@ function callDshApi(method, payload, timeoutMs = 30000) {
 // ---- dida365 MCP 客户端（今日任务信息卡）----
 // 凭据从 DSH profile 的 cordis.patch.yml 读取（Bearer token），避免硬编码。
 const DIDA_MCP_URL = 'https://mcp.dida365.com';
-const DIDA_MCP_CONFIG = 'F:\\.dsh\\profiles\\web\\cordis.patch.yml';
+const DIDA_MCP_CONFIG = cfg('didaMcpConfig', ''); // 滴答 MCP Bearer token 所在的 cordis.patch.yml（config.json 配置）
 
 function getDidaMcpToken() {
   try {
@@ -753,7 +810,7 @@ async function runPush() {
   };
   pushLog(entry);
   try {
-    const created = await callDshApi('session.create', { cwd: 'F:\\Anki - DeepSeek -Harness' });
+    const created = await callDshApi('session.create', { cwd: cfg('pushCwd', DIDA_DEFAULT_CWD) });
     const sessionId = created.sessionId;
     entry.sessionId = sessionId;
     const prompted = await callDshApi('session.prompt', {
@@ -1187,7 +1244,18 @@ const server = http.createServer(async (req, res) => {
           '"' + clean + '"',
         ],
       };
-      if (ext === '.exe') btn.process = baseName.toLowerCase() + '.exe';
+      // 进程徽章：.exe 直接用文件名；.lnk 解析出真实目标 exe 再配
+      // （解析失败如 UWP 快捷方式则无徽章，不影响点击功能）
+      let processName = null;
+      if (ext === '.exe') {
+        processName = baseName.toLowerCase() + '.exe';
+      } else if (ext === '.lnk') {
+        const realTarget = await resolveLnkTarget(clean);
+        if (realTarget && /\.exe$/i.test(realTarget)) {
+          processName = path.basename(realTarget).toLowerCase();
+        }
+      }
+      if (processName) btn.process = processName;
       saveButtonsFile(loadButtons().concat([btn]));
       const ico = path.join(ICON_DIR, id + '.ico');
       const iconOk = await extractAppIcon(clean, ico);

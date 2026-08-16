@@ -15,12 +15,12 @@ if %errorlevel%==0 goto activate
 
 :launch
 rem Anki not running: start via Start Menu shortcut
-start "" "C:\Users\11544\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Anki.lnk"
+start "" "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Anki.lnk"
 goto done
 
 :activate
 rem Anki running: delegate to the shared smart launcher (restore + foreground)
-powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "F:\AllWorkSpace\workbench\launch-app.ps1" "C:\Users\11544\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Anki.lnk"
+powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0launch-app.ps1" "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Anki.lnk"
 goto done
 
 :done

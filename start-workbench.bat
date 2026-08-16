@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 title Workbench Launcher
-cd /d F:\AllWorkSpace\workbench
+cd /d "%~dp0"
 
 REM ===== kill leftover process holding port 3180 (if any) =====
 for /f "tokens=5" %%a in ('%SystemRoot%\System32\netstat.exe -ano ^| %SystemRoot%\System32\findstr.exe ":3180" ^| %SystemRoot%\System32\findstr.exe "LISTENING"') do (
@@ -14,7 +14,7 @@ echo.
 REM ===== launch node server in a hidden window (VBScript) =====
 set "VBS=%TEMP%\workbench-start-hidden.vbs"
 >  "%VBS%" echo Set WshShell = CreateObject("WScript.Shell")
->> "%VBS%" echo WshShell.Run "cmd /c ""C:\Users\11544\AppData\Local\hermes\node\node.exe"" server.js > workbench.log 2>&1", 0, False
+>> "%VBS%" echo WshShell.Run "cmd /c node server.js > workbench.log 2>&1", 0, False
 %SystemRoot%\System32\wscript.exe "%VBS%"
 
 REM ===== wait until port 3180 is listening (up to ~40 seconds) =====
@@ -26,7 +26,7 @@ set /a tries+=1
 if %tries% LSS 20 goto wait
 echo.
 echo WARNING: port 3180 did not come up within 40 seconds.
-echo Check the log: F:\AllWorkSpace\workbench\workbench.log
+echo Check the log: workbench.log (in the workbench folder)
 goto done
 
 :up

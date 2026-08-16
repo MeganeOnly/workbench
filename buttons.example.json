@@ -1,0 +1,127 @@
+{
+    "title": "我的工作台",
+    "buttons": [
+        {
+            "id": "dsh",
+            "name": "DSH 服务",
+            "description": "点击启动或停止某个本地 Web 服务（端口 3080），按钮颜色随状态变化",
+            "size": "small",
+            "port": 3080,
+            "toggle": {
+                "start": {
+                    "label": "启动服务",
+                    "color": "#047857",
+                    "command": "cmd.exe",
+                    "args": ["/c", "call \"C:\\Path\\To\\start-my-service.bat\""]
+                },
+                "stop": {
+                    "label": "停止服务",
+                    "color": "#dc2626",
+                    "command": "cmd.exe",
+                    "args": ["/c", "call \"C:\\Path\\To\\stop-my-service.bat\""]
+                }
+            }
+        },
+        {
+            "id": "push",
+            "name": "Push 队列",
+            "description": "显示 Anki 队列待推送数量；点击新建一个 DSH 对话并自动发送 push",
+            "kind": "push",
+            "size": "small",
+            "color": "#047857"
+        },
+        {
+            "id": "anki",
+            "name": "Anki",
+            "description": "打开 Anki：未运行则启动，已运行则激活窗口到前台",
+            "size": "small",
+            "color": "#3b82f6",
+            "process": "anki.exe",
+            "command": "cmd.exe",
+            "args": ["/c", "call \"launch-anki.bat\""]
+        },
+        {
+            "id": "dida-inbox",
+            "name": "整理 Inbox",
+            "description": "新建 DSH 对话并发送「整理inbox」；每晚 21:00 后出现，点过一次当天隐藏",
+            "kind": "dida",
+            "prompt": "整理inbox",
+            "showAfter": "21:00",
+            "size": "wide",
+            "color": "#0d9488"
+        },
+        {
+            "id": "dida-plan",
+            "name": "安排今日任务",
+            "description": "新建 DSH 对话并发送「安排今日任务」；点过一次当天隐藏",
+            "kind": "dida",
+            "prompt": "安排今日任务",
+            "size": "wide",
+            "color": "#0d9488"
+        },
+        {
+            "id": "dida-weekly",
+            "name": "周报",
+            "description": "新建 DSH 对话并发送「该周报了」；每周日 22:30 后出现，点过一次本周隐藏",
+            "kind": "dida",
+            "prompt": "该周报了",
+            "showAfter": "22:30",
+            "weekly": true,
+            "weekday": 0,
+            "size": "wide",
+            "color": "#0d9488"
+        },
+        {
+            "id": "sm18",
+            "name": "SuperMemo 18",
+            "description": "打开 SuperMemo 18：未运行则启动，已运行则激活窗口到前台",
+            "size": "small",
+            "color": "#3b82f6",
+            "process": "sm18.exe",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "launch-app.ps1",
+                "\"D:\\Apps\\SuperMemo18\\sm18.exe\""
+            ]
+        },
+        {
+            "id": "zotero",
+            "name": "Zotero",
+            "description": "打开 C:\\Program Files\\Zotero\\zotero.exe",
+            "size": "small",
+            "color": "#3b82f6",
+            "auto": true,
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "launch-app.ps1",
+                "\"C:\\Program Files\\Zotero\\zotero.exe\""
+            ],
+            "process": "zotero.exe"
+        },
+        {
+            "id": "obsidian",
+            "name": "Obsidian",
+            "description": "打开开始菜单里的 Obsidian 快捷方式",
+            "size": "small",
+            "color": "#3b82f6",
+            "auto": true,
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "launch-app.ps1",
+                "\"C:\\Users\\you\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Obsidian.lnk\""
+            ]
+        }
+    ]
+}
