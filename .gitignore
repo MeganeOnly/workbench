@@ -1,0 +1,15 @@
+# 运行日志
+*.log
+
+# 运行时状态（服务端自动生成/改写，含个人数据，不随仓库分发）
+bookmarks.json
+dida-state.json
+push-state.json
+feeds.json
+
+# 自动生成的缓存与图标（换机后随「添加快捷方式」重新生成）
+favicons/
+public/icons/
+
+# 第三方设计参考素材（来源见各目录 SOURCE.txt，不随仓库分发）
+design-references/

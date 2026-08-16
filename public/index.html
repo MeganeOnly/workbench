@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#10b981">
+<title>我的工作台</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-head">
+    <button class="collapse-btn" id="collapse-btn" title="收起书签">&laquo;</button>
+    <h2>书签</h2>
+    <button class="add-btn" id="add-bookmark-btn" title="添加书签">+</button>
+  </div>
+  <ul class="bookmark-list" id="bookmark-list"></ul>
+</aside>
+
+<div class="main-area">
+  <header class="topbar">
+    <div class="topbar-left">
+      <button class="expand-sidebar hidden" id="expand-sidebar" title="展开书签">&raquo;</button>
+      <h1 id="workbench-title">我的工作台</h1>
+    </div>
+    <div class="topbar-right">
+      <span class="rate-badge" id="rate-badge" title="DeepSeek API 峰谷定价：高峰 9-12 / 14-18（北京时间），其余为空闲时段（半价）">计算中...</span>
+      <div class="server-status">
+        <span class="dot" id="server-dot"></span>
+        <span id="server-status-text">连接中...</span>
+      </div>
+      <div class="style-wrap" id="style-wrap">
+        <button class="style-btn" id="style-btn" title="切换样式">
+          <span class="sp-icon">&#9680;</span>样式
+        </button>
+        <div class="style-panel hidden" id="style-panel" role="dialog" aria-label="样式设置">
+          <div class="sp-section" data-collapsible="appearance">
+            <button class="sp-title-row" type="button" aria-expanded="true">
+              <span class="sp-title-icon">&#9656;</span><span>外观</span>
+            </button>
+            <div class="sp-content">
+            <div class="sp-grid">
+              <button class="sp-opt" data-theme-opt="emerald">
+                <span class="swatch">
+                  <span class="swatch-dot" style="background:#f6f9f5"></span>
+                  <span class="swatch-dot" style="background:#ffffff"></span>
+                  <span class="swatch-dot" style="background:#10b981"></span>
+                </span>
+                <span class="name">翡翠极简</span>
+                <span class="desc">浅色 · Bento 卡片墙（默认）</span>
+              </button>
+              <button class="sp-opt" data-theme-opt="night">
+                <span class="swatch">
+                  <span class="swatch-dot" style="background:#0d1812"></span>
+                  <span class="swatch-dot" style="background:#14221a"></span>
+                  <span class="swatch-dot" style="background:#34d399"></span>
+                </span>
+                <span class="name">墨夜</span>
+                <span class="desc">深色墨绿 · 护眼沉浸</span>
+              </button>
+              <button class="sp-opt" data-theme-opt="glass">
+                <span class="swatch">
+                  <span class="swatch-dot" style="background:#0d1915"></span>
+                  <span class="swatch-dot" style="background:rgba(255,255,255,.25)"></span>
+                  <span class="swatch-dot" style="background:#34d399"></span>
+                </span>
+                <span class="name">琉璃</span>
+                <span class="desc">玻璃拟态 · 深色渐变毛玻璃</span>
+              </button>
+              <button class="sp-opt" data-theme-opt="terminal">
+                <span class="swatch">
+                  <span class="swatch-dot" style="background:#070d08"></span>
+                  <span class="swatch-dot" style="background:#0c150d"></span>
+                  <span class="swatch-dot" style="background:#00e676"></span>
+                </span>
+                <span class="name">终端</span>
+                <span class="desc">黑底荧光绿 · 全等宽 · 扫描线</span>
+              </button>
+              <button class="sp-opt" data-theme-opt="brutal">
+                <span class="swatch">
+                  <span class="swatch-dot" style="background:#f7f3e8"></span>
+                  <span class="swatch-dot" style="background:#17150f"></span>
+                  <span class="swatch-dot" style="background:#10b981"></span>
+                </span>
+                <span class="name">粗野</span>
+                <span class="desc">粗黑边框 · 硬投影 · 贴纸感</span>
+              </button>
+              <button class="sp-opt" data-theme-opt="editorial">
+                <span class="swatch">
+                  <span class="swatch-dot" style="background:#fafaf7"></span>
+                  <span class="swatch-dot" style="background:#ffffff"></span>
+                  <span class="swatch-dot" style="background:#0f8a5f"></span>
+                </span>
+                <span class="name">杂志编辑</span>
+                <span class="desc">大衬线标题 · 报纸分隔线</span>
+              </button>
+              <button class="sp-opt" data-theme-opt="vintage">
+                <span class="swatch">
+                  <span class="swatch-dot" style="background:#f2e9d5"></span>
+                  <span class="swatch-dot" style="background:#fdf8ea"></span>
+                  <span class="swatch-dot" style="background:#5d7d4e"></span>
+                </span>
+                <span class="name">复古纸感</span>
+                <span class="desc">米黄纸 · 颗粒噪点 · 怀旧</span>
+              </button>
+              <button class="sp-opt" data-theme-opt="pixel">
+                <span class="swatch">
+                  <span class="swatch-dot" style="background:#cfd8b8"></span>
+                  <span class="swatch-dot" style="background:#0f380f"></span>
+                  <span class="swatch-dot" style="background:#9bbc0f"></span>
+                </span>
+                <span class="name">像素掌机</span>
+                <span class="desc">Game Boy 绿 · 像素块 · 等宽</span>
+              </button>
+              <button class="sp-opt" data-theme-opt="corporate">
+                <span class="swatch">
+                  <span class="swatch-dot" style="background:#f7f8f6"></span>
+                  <span class="swatch-dot" style="background:#ffffff"></span>
+                  <span class="swatch-dot" style="background:#0b7a52"></span>
+                </span>
+                <span class="name">企业专业</span>
+                <span class="desc">正式克制 · 细线 · 祖母绿品牌</span>
+              </button>
+            </div>
+            </div>
+          </div>
+          <div class="sp-section" data-collapsible="layout">
+            <button class="sp-title-row" type="button" aria-expanded="true">
+              <span class="sp-title-icon">&#9656;</span><span>布局</span>
+            </button>
+            <div class="sp-content">
+            <div class="sp-grid">
+              <button class="sp-opt" data-layout-opt="grid">
+                <span class="lay-icon">&#9642;</span>
+                <span class="name">Bento 网格</span>
+                <span class="desc">卡片错落拼墙（默认）</span>
+              </button>
+              <button class="sp-opt" data-layout-opt="list">
+                <span class="lay-icon">&#9776;</span>
+                <span class="name">控制台列表</span>
+                <span class="desc">每卡一行 · 密集高效</span>
+              </button>
+              <button class="sp-opt" data-layout-opt="split">
+                <span class="lay-icon">&#8214;</span>
+                <span class="name">双栏仪表盘</span>
+                <span class="desc">左操作区 + 右信息面板</span>
+              </button>
+              <button class="sp-opt" data-layout-opt="split-center">
+                <span class="lay-icon">&#9673;</span>
+                <span class="name">任务居中仪表盘</span>
+                <span class="desc">左操作区 · 中今日任务 · 右信息面板</span>
+              </button>
+            </div>
+            </div>
+          </div>
+          <div class="sp-section" data-collapsible="prefs">
+            <button class="sp-title-row" type="button" aria-expanded="true">
+              <span class="sp-title-icon">&#9656;</span><span>偏好</span>
+            </button>
+            <div class="sp-content">
+            <div class="sp-row">
+              <div class="sp-row-text">
+                <span class="name">侧边栏</span>
+                <span class="desc">显示书签管理侧栏（书签卡始终可用）</span>
+              </div>
+              <button class="switch" id="sidebar-switch" role="switch" aria-checked="true" title="启用 / 禁用侧边栏">
+                <span class="switch-thumb"></span>
+              </button>
+            </div>
+            <div class="sp-row">
+              <div class="sp-row-text">
+                <span class="name">大数字</span>
+                <span class="desc">信息卡大数字统计风格</span>
+              </div>
+              <button class="switch" id="bignum-switch" role="switch" aria-checked="true" title="大数字风格开关">
+                <span class="switch-thumb"></span>
+              </button>
+            </div>
+            <div class="sp-row">
+              <div class="sp-row-text">
+                <span class="name">数字滚动</span>
+                <span class="desc">余额/队列数字变化时滚动计数</span>
+              </div>
+              <button class="switch" id="countup-switch" role="switch" aria-checked="true" title="数字滚动开关">
+                <span class="switch-thumb"></span>
+              </button>
+            </div>
+            <div class="sp-row">
+              <div class="sp-row-text">
+                <span class="name">卡片图标</span>
+                <span class="desc">卡片标题左侧小图标</span>
+              </div>
+              <button class="switch" id="icons-switch" role="switch" aria-checked="true" title="卡片图标开关">
+                <span class="switch-thumb"></span>
+              </button>
+            </div>
+            </div>
+          </div>
+          <div class="sp-section" data-collapsible="shortcut">
+            <button class="sp-title-row" type="button" aria-expanded="true">
+              <span class="sp-title-icon">&#9656;</span><span>快捷方式</span>
+            </button>
+            <div class="sp-content">
+              <div class="sc-field">
+                <label for="sc-name">名称（可选，留空用文件名）</label>
+                <input id="sc-name" type="text" placeholder="如：Obsidian" autocomplete="off">
+              </div>
+              <div class="sc-field">
+                <label for="sc-path">程序路径（.exe / .lnk，可直接粘贴）</label>
+                <input id="sc-path" type="text" placeholder="F:\...\app.exe" autocomplete="off">
+              </div>
+              <div class="sc-field">
+                <label>颜色</label>
+                <div class="sc-colors" id="sc-colors"></div>
+              </div>
+              <div class="sc-field">
+                <label>尺寸</label>
+                <div class="sc-size-opts" id="sc-size">
+                  <button type="button" data-size="small" class="active">小卡</button>
+                  <button type="button" data-size="wide">宽卡</button>
+                </div>
+              </div>
+              <button type="button" class="sc-add-btn" id="sc-add-btn">添加按钮</button>
+              <button type="button" class="sc-list-toggle" id="sc-list-toggle" aria-expanded="true" title="展开 / 收起">
+                <span class="sc-caret">&#9656;</span>已添加的快捷方式
+              </button>
+              <ul class="sc-list" id="sc-list"></ul>
+            </div>
+          </div>
+          <div class="sp-foot">选择即时生效并自动保存，可随时切换回来。</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="dida-col" id="dida-col">
+      <!-- 仪表盘布局：今日任务栏（由 app.js 渲染，仅 split / split-center 布局显示） -->
+    </div>
+    <section class="buttons-grid" id="buttons-grid">
+      <!-- 卡片（功能卡 + 信息卡）由 app.js 渲染，可拖拽调整位置 -->
+    </section>
+    <div class="side-col" id="side-col"></div>
+
+    <section class="logs-panel">
+      <h2>运行记录</h2>
+      <ul id="logs-list"></ul>
+    </section>
+  </main>
+</div>
+
+<!-- 添加书签弹窗 -->
+<div class="modal-overlay hidden" id="bookmark-modal">
+  <div class="modal">
+    <h3>添加书签</h3>
+    <label for="bm-name">名称</label>
+    <input type="text" id="bm-name" placeholder="例如: DeepSeek 文档">
+    <label for="bm-url">网址</label>
+    <input type="text" id="bm-url" placeholder="https://example.com">
+    <div class="modal-actions">
+      <button class="modal-cancel" id="bm-cancel">取消</button>
+      <button class="modal-save" id="bm-save">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 文件拖放添加快捷方式的提示遮罩（.exe / .lnk 拖进页面时显示） -->
+<div class="drop-overlay" id="drop-overlay">
+  <div class="drop-overlay-inner">松开鼠标，添加为快捷方式</div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
