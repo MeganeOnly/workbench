@@ -430,6 +430,9 @@ function slugifyId(s) {
 // 提取 exe/.lnk 内嵌图标为 ICO（失败返回 false，不致命：前端回退字符图标）
 function extractAppIcon(target, outIco) {
   return new Promise((resolve) => {
+    // fresh clone 没有 public/icons/ 目录时 PS 脚本会 DirectoryNotFound（真实踩过：
+    // 本机目录一直存在从未暴露）。先确保目录存在，建目录失败不致命、走回退。
+    try { if (!fs.existsSync(ICON_DIR)) fs.mkdirSync(ICON_DIR, { recursive: true }); } catch (e) { /* 忽略 */ }
     const ps = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
     const child = spawn(ps, [
       '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
