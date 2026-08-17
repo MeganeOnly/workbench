@@ -198,6 +198,20 @@ body.sidebar-collapsed .sidebar {
 .bookmark-item:hover .bm-del { opacity: 1; }
 .bookmark-item .bm-del:hover { color: var(--err); }
 
+/* 编辑按钮（✎）：与删除按钮同款 hover 显示；颜色语义不同（编辑≠危险） */
+.bookmark-item .bm-edit {
+  border: none;
+  background: none;
+  color: var(--text-3);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0 2px;
+  opacity: 0;
+  transition: opacity .12s ease, color .12s ease;
+}
+.bookmark-item:hover .bm-edit { opacity: 1; }
+.bookmark-item .bm-edit:hover { color: var(--accent-deep); }
+
 /* 书签拖拽手柄与排序指示 */
 .bookmark-item .bm-drag {
   cursor: grab;
@@ -218,6 +232,20 @@ body.sidebar-collapsed .sidebar {
   font-size: 12px;
   color: var(--text-3);
   text-align: center;
+}
+
+/* 书签模式标签（仅当书签不是"全部模式可见"时显示） */
+.bookmark-item .bm-mode-tag {
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+  flex: none;
+  font-weight: 600;
+  letter-spacing: .02em;
+  margin-left: 4px;
 }
 
 /* ============================================================
@@ -614,7 +642,7 @@ body[data-layout="list"] .card.shortcut-card .run-btn { padding: 10px 14px; font
 }
 
 .card .run-btn:active {
-  /* 按下"动起来"：下沉 + 内阴影 + 变暗（brutal/pixel/vintage 主题有各自的 :active 覆盖） */
+  /* 按下"动起来"：下沉 + 内阴影 + 变暗（brutal/vintage 主题有各自的 :active 覆盖） */
   transform: translateY(2px) scale(.97);
   box-shadow: inset 0 2px 6px rgba(0, 0, 0, .18);
   filter: brightness(.9);
@@ -668,9 +696,211 @@ body[data-layout="split-center"] .buttons-grid .card:not(.stat-card) {
   font-weight: 500;
 }
 
+/* DSH 对话状态卡（feedback 2）：
+   - working（海绵脉冲）:  琥珀色 + 柔和脉冲动画
+   - idle（空闲）:          绿色
+   - offline（离线）:       灰色低对比
+   - error（错误）:         红色（复用 .err） */
+.stat-value.ok { color: var(--accent-deep); }
+.stat-value.off { color: var(--text-3); opacity: .7; }
+.stat-value.working {
+  color: var(--warn);
+  animation: dsh-session-pulse 1.4s ease-in-out infinite;
+}
+@keyframes dsh-session-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .55; }
+}
+
 .stat-sub {
   font-size: 12px;
   color: var(--text-3);
+}
+
+/* ---- sys-dsh-sessions 卡片（v0.5 视觉重做）：小圆点 + 极小 meta ---- */
+/* 设计：移除 22px 等宽大字 + 琥珀脉冲动画；改用 8px 圆点模仿 DSH 会话栏视觉语言。
+   圆点状态：working=旋转琥珀扇形 / idle=绿 / error=红 / offline=半透明灰 / 首轮查询中=灰脉冲 */
+.dsh-status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 16px 12px;
+  flex: 1;
+  justify-content: center;
+}
+
+.dsh-dots {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 14px;     /* 防止 idle/offline 单点时整行塌缩 */
+}
+
+.dsh-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+
+/* 首轮查询中（dshSessions === null）：稳定灰点会让人误以为 offline，用脉冲区分 */
+.dsh-dot.loading {
+  background: var(--text-3);
+  animation: dsh-dot-pulse 1.2s ease-in-out infinite;
+}
+
+/* 空闲：DSH 在线但所有 session 都未工作；用主题 --accent 绿（与其它"在线/OK"语义一致） */
+.dsh-dot.idle { background: var(--accent); }
+
+/* 离线：DSH 3080 不可达；半透明灰，无动画（与首轮查询中的"脉冲灰"区分） */
+.dsh-dot.offline { background: var(--text-3); opacity: .5; }
+
+/* 错误：API 调用失败但非 ECONNREFUSED；用主题 --err 红 */
+.dsh-dot.error { background: var(--err); }
+
+/* 工作中：旋转琥珀圆环（扇形 = border-only + border-top:transparent + rotate）
+   与 DSH 会话栏 working 圆点同款；用 transform 触发 GPU 合成避免重排 */
+.dsh-dot.working {
+  background: transparent;
+  border: 1.5px solid var(--warn);
+  border-top-color: transparent;
+  animation: dsh-dot-spin .9s linear infinite;
+}
+
+/* 待确认（v0.6）：琥珀静态（不旋转）—— 与 working 同色但静止，靠"动 vs 不动"区分
+   用户曾想用橙色/酒红色，但新增主题 token 跨 5 主题工作量过大；当前用 --warn 静态版 */
+.dsh-dot.pending {
+  background: var(--warn);
+  border: none;
+}
+
+@keyframes dsh-dot-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes dsh-dot-pulse {
+  0%, 100% { opacity: .35; }
+  50%      { opacity: 1; }
+}
+
+/* 圆点溢出计数（active > DSH_DOTS_MAX 时）：极小文字角标 */
+.dsh-dot-count {
+  font-family: var(--font-body);
+  font-size: 11px;
+  color: var(--text-3);
+  margin-left: 2px;
+  letter-spacing: .02em;
+}
+
+.dsh-meta {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* ---- MiniMax 套餐卡：5h / 周窗口进度条 + 警示 ---- */
+.mmx-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  padding: 4px 16px 12px;
+}
+.mmx-row {
+  display: grid;
+  grid-template-columns: 56px 1fr 56px 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  transition: background-color .15s ease, box-shadow .15s ease;
+}
+.mmx-label {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .01em;
+  color: var(--text);
+}
+.mmx-bar {
+  position: relative;
+  height: 10px;
+  background: var(--surface-2);
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.mmx-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width .4s ease, background-color .2s ease;
+}
+.mmx-pct {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.mmx-sub {
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  white-space: nowrap;
+}
+.mmx-meta {
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 2px 6px 0;
+  line-height: 1.4;
+}
+.mmx-pace-num {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent-deep);
+  padding: 0 2px;
+}
+/* 警示：5h 限额将耗尽（红）—— 标签/百分比/进度条变红（2026-08-16 去掉 danger-strong 红框） */
+.mmx-row.danger .mmx-bar-fill { background: var(--err); }
+.mmx-row.danger .mmx-pct { color: var(--err); }
+.mmx-row.danger .mmx-label { color: var(--err); }
+/* 警示：周限额在浪费（琥珀脉冲，比 5h danger 更显著，符合用户"明显高亮/红色"要求） */
+.mmx-row.warn .mmx-bar-fill { background: var(--warn); }
+.mmx-row.warn .mmx-pct { color: var(--warn); }
+.mmx-row.warn .mmx-label { color: var(--warn); }
+.mmx-row.warn-strong {
+  background: var(--warn-soft);
+  box-shadow: inset 0 0 0 2px var(--warn);
+  animation: mmx-warn-pulse 1.6s ease-in-out infinite;
+}
+@keyframes mmx-warn-pulse {
+  0%, 100% { box-shadow: inset 0 0 0 2px var(--warn); }
+  50%      { box-shadow: inset 0 0 0 2px var(--warn), 0 0 0 3px rgba(180, 83, 9, .18); }
+}
+.mmx-alert {
+  margin-top: 2px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.mmx-alert.warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border: 1px solid rgba(180, 83, 9, .35);
+  font-weight: 600;
+}
+.mmx-alert.err {
+  background: var(--err-soft);
+  color: var(--err);
+  border: 1px solid rgba(220, 38, 38, .3);
+  font-weight: 600;
 }
 
 /* 状态卡：状态行列表 */
@@ -731,6 +961,56 @@ body[data-layout="split-center"] .buttons-grid .card:not(.stat-card) {
 .bm-card-list a:hover {
   background: var(--surface-2);
   color: var(--accent-deep);
+}
+
+/* 卡片墙书签 .bm-item（span 容器）+ ✎ 编辑按钮（hover 显示） */
+.bm-card-list .bm-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 8px;
+  transition: background .12s ease;
+  cursor: grab;
+  -webkit-user-drag: none;
+}
+.bm-card-list .bm-item:hover {
+  background: var(--surface-2);
+}
+.bm-card-list .bm-item .bm-name {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 6px 6px 8px;
+  font-size: 12.5px;
+  color: var(--text);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bm-card-list .bm-item .bm-name:hover {
+  color: var(--accent-deep);
+}
+.bm-card-list .bm-item .bm-edit-inline {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .12s ease, color .12s ease, background .12s ease;
+  border-radius: 4px;
+  padding: 0;
+  margin-right: 4px;
+}
+.bm-card-list .bm-item:hover .bm-edit-inline {
+  opacity: 1;
+}
+.bm-card-list .bm-item .bm-edit-inline:hover {
+  color: var(--accent-deep);
+  background: var(--accent-soft);
 }
 
 .bm-card-empty {
@@ -1084,6 +1364,25 @@ body[data-layout="split-center"] .buttons-grid .card:not(.stat-card) {
   box-shadow: 0 0 0 3px var(--ring);
 }
 
+.modal select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-input);
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--text);
+  outline: none;
+  background: var(--surface);
+  transition: border-color .15s ease, box-shadow .15s ease;
+  cursor: pointer;
+}
+
+.modal select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
 .modal-actions {
   display: flex;
   justify-content: flex-end;
@@ -1159,228 +1458,8 @@ body[data-layout="split-center"] .buttons-grid .card:not(.stat-card) {
 
 /* ============================================================
    多主题切换（body[data-theme]）
-   emerald（默认，不写属性即生效）· night（墨夜）· glass（琉璃）
+   emerald（默认，不写属性即生效）
    ============================================================ */
-
-/* ---- 墨夜：深色墨绿 ---- */
-body[data-theme="night"] {
-  --bg: #0d1812;
-  --surface: #14221a;
-  --surface-2: #1c2d23;
-  --border: #22372b;
-  --border-strong: #33503f;
-  --text: #e7f0ea;
-  --text-2: #9db3a6;
-  --text-3: #71897b;
-  --accent: #34d399;
-  --accent-hover: #2bbf8b;
-  --accent-deep: #34d399;
-  --accent-deeper: #6ee7b7;
-  --accent-soft: #123526;
-  --accent-soft-2: #1d4531;
-  --ring: rgba(52, 211, 153, .28);
-  --ok: #34d399;
-  --err: #f87171;
-  --err-soft: #3b1f1f;
-  --warn: #fbbf24;
-  --warn-soft: #3a2c13;
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, .35);
-  --shadow-lift: 0 12px 30px -14px rgba(16, 185, 129, .35);
-}
-
-body[data-theme="night"] {
-  background:
-    radial-gradient(1000px 380px at 50% -120px, rgba(52, 211, 153, .09), transparent 62%) fixed,
-    var(--bg);
-}
-
-body[data-theme="night"] .topbar {
-  background: rgba(13, 24, 18, .75);
-}
-
-/* 亮绿填充按钮改用深色文字（AA 对比度） */
-body[data-theme="night"] .run-btn,
-body[data-theme="night"] .add-btn,
-body[data-theme="night"] .modal-save {
-  color: #06281c;
-}
-
-body[data-theme="night"] .modal-cancel:hover { background: #24372b; }
-body[data-theme="night"] .dot { background: #54685c; }
-body[data-theme="night"] .dot.on::after { border-color: rgba(52, 211, 153, .5); }
-body[data-theme="night"] .status-row .row-dot { background: #46594d; }
-body[data-theme="night"] .bookmark-item:hover { background: rgba(52, 211, 153, .08); }
-
-body[data-theme="night"] ::-webkit-scrollbar-thumb { background-color: #2e4536; }
-body[data-theme="night"] ::-webkit-scrollbar-thumb:hover { background-color: #3a5946; }
-
-/* ---- 琉璃：真玻璃拟态（深色渐变背景 + 强毛玻璃 + 发光边框） ---- */
-body[data-theme="glass"] {
-  --bg: #0d1915;
-  --surface: #ffffff;
-  --surface-2: rgba(255, 255, 255, .08);
-  --border: rgba(255, 255, 255, .2);
-  --border-strong: rgba(255, 255, 255, .34);
-  --text: #eaf6f0;
-  --text-2: #b4cbbf;
-  --text-3: #7fa28f;
-  --accent: #34d399;
-  --accent-hover: #10b981;
-  --accent-deep: #34d399;
-  --accent-deeper: #6ee7b7;
-  --accent-soft: rgba(52, 211, 153, .14);
-  --accent-soft-2: rgba(52, 211, 153, .22);
-  --ring: rgba(52, 211, 153, .3);
-  --ok: #34d399;
-  --err: #ff8a80;
-  --err-soft: rgba(255, 138, 128, .14);
-  --warn: #ffd54f;
-  --warn-soft: rgba(255, 213, 79, .14);
-  --shadow-card: 0 4px 20px rgba(0, 0, 0, .25);
-  --shadow-lift: 0 16px 44px -12px rgba(52, 211, 153, .35);
-}
-
-body[data-theme="glass"] {
-  background:
-    radial-gradient(900px 480px at 18% -100px, rgba(16, 185, 129, .30), transparent 60%),
-    radial-gradient(1000px 500px at 90% 10%, rgba(52, 211, 153, .20), transparent 55%),
-    radial-gradient(800px 600px at 50% 120%, rgba(6, 78, 59, .55), transparent 65%),
-    var(--bg);
-}
-
-body[data-theme="glass"] .card,
-body[data-theme="glass"] .sidebar,
-body[data-theme="glass"] #logs-list li,
-body[data-theme="glass"] .modal,
-body[data-theme="glass"] .style-panel {
-  background: rgba(255, 255, 255, .08);
-  -webkit-backdrop-filter: blur(22px) saturate(1.4);
-  backdrop-filter: blur(22px) saturate(1.4);
-  border-color: rgba(255, 255, 255, .18);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .14), 0 12px 40px rgba(0, 0, 0, .32);
-}
-
-body[data-theme="glass"] .topbar {
-  background: rgba(255, 255, 255, .06);
-  -webkit-backdrop-filter: blur(24px) saturate(1.4);
-  backdrop-filter: blur(24px) saturate(1.4);
-  border-color: rgba(255, 255, 255, .14);
-}
-
-body[data-theme="glass"] .card:hover {
-  border-color: rgba(52, 211, 153, .55);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .16), 0 18px 50px -10px rgba(52, 211, 153, .35);
-}
-
-body[data-theme="glass"] .run-btn,
-body[data-theme="glass"] .add-btn,
-body[data-theme="glass"] .modal-save {
-  color: #06281c;
-}
-
-body[data-theme="glass"] .badge {
-  background: rgba(255, 255, 255, .1);
-  border-color: rgba(255, 255, 255, .28);
-}
-
-body[data-theme="glass"] .modal input {
-  background: rgba(255, 255, 255, .1);
-  border-color: rgba(255, 255, 255, .26);
-  color: var(--text);
-}
-
-body[data-theme="glass"] .card .queue-line {
-  background: rgba(52, 211, 153, .12);
-  border-color: rgba(52, 211, 153, .3);
-}
-
-body[data-theme="glass"] .bookmark-item:hover { background: rgba(52, 211, 153, .12); }
-body[data-theme="glass"] .bm-card-list a:hover { background: rgba(255, 255, 255, .12); }
-body[data-theme="glass"] .sp-opt { background: rgba(255, 255, 255, .1); }
-body[data-theme="glass"] .modal-cancel:hover { background: rgba(255, 255, 255, .12); }
-
-/* ---- 终端：黑底荧光绿 · 全等宽 · 扫描线 ---- */
-body[data-theme="terminal"] {
-  --bg: #070d08;
-  --surface: #0c150d;
-  --surface-2: #122210;
-  --border: #1d3b24;
-  --border-strong: #2c5c38;
-  --text: #c8f7d4;
-  --text-2: #8fd6a0;
-  --text-3: #5a8f68;
-  --accent: #00e676;
-  --accent-hover: #33ff88;
-  --accent-deep: #00e676;
-  --accent-deeper: #33ff88;
-  --accent-soft: #0e2a16;
-  --accent-soft-2: #143a1f;
-  --ring: rgba(0, 230, 118, .3);
-  --ok: #00e676;
-  --err: #ff5252;
-  --err-soft: #2b1414;
-  --warn: #ffd740;
-  --warn-soft: #2a2310;
-  --shadow-card: 0 0 0 1px rgba(0, 230, 118, .06);
-  --shadow-lift: 0 0 26px rgba(0, 230, 118, .16);
-  --radius-card: 4px;
-  --radius-btn: 4px;
-  --radius-input: 4px;
-}
-
-body[data-theme="terminal"] {
-  font-family: var(--font-mono);
-  background:
-    repeating-linear-gradient(0deg, rgba(0, 230, 118, .025) 0 1px, transparent 1px 4px) fixed,
-    var(--bg);
-}
-
-body[data-theme="terminal"] .topbar h1,
-body[data-theme="terminal"] .sidebar-head h2,
-body[data-theme="terminal"] .card h3,
-body[data-theme="terminal"] .logs-panel h2,
-body[data-theme="terminal"] .modal h3,
-body[data-theme="terminal"] .sp-title {
-  font-family: var(--font-mono);
-  letter-spacing: .06em;
-}
-
-body[data-theme="terminal"] .topbar {
-  background: rgba(7, 13, 8, .85);
-}
-
-body[data-theme="terminal"] .card {
-  border-radius: var(--radius-card);
-}
-
-body[data-theme="terminal"] .card:hover {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent), var(--shadow-lift);
-  transform: none;
-}
-
-body[data-theme="terminal"] .run-btn,
-body[data-theme="terminal"] .add-btn,
-body[data-theme="terminal"] .modal-save {
-  color: #04120a;
-  border-radius: var(--radius-btn);
-}
-
-body[data-theme="terminal"] .run-btn:hover,
-body[data-theme="terminal"] .add-btn:hover,
-body[data-theme="terminal"] .modal-save:hover {
-  box-shadow: 0 0 14px rgba(0, 230, 118, .45);
-}
-
-body[data-theme="terminal"] .modal-cancel:hover { background: #18281a; }
-body[data-theme="terminal"] .dot { background: #3d5c47; }
-body[data-theme="terminal"] .dot.on::after { border-color: rgba(0, 230, 118, .5); }
-body[data-theme="terminal"] .status-row .row-dot { background: #34513d; }
-body[data-theme="terminal"] .bookmark-item:hover { background: rgba(0, 230, 118, .08); }
-body[data-theme="terminal"] .style-panel { background: var(--surface); }
-
-body[data-theme="terminal"] ::-webkit-scrollbar-thumb { background-color: #21402a; }
-body[data-theme="terminal"] ::-webkit-scrollbar-thumb:hover { background-color: #2c5c38; }
 
 /* ---- 粗野：新粗野主义（粗黑边框 · 硬投影 · 贴纸感） ---- */
 body[data-theme="brutal"] {
@@ -1576,91 +1655,6 @@ body[data-theme="vintage"] .run-btn:active { transform: translateY(1px); box-sha
 body[data-theme="vintage"] .bookmark-item:hover { background: #efe5cc; }
 body[data-theme="vintage"] .modal-cancel:hover { background: #efe5cc; }
 body[data-theme="vintage"] .bm-card-list a:hover { background: #efe5cc; }
-
-/* ---- 像素掌机：Game Boy 绿 · 像素块 · 等宽 ---- */
-body[data-theme="pixel"] {
-  --bg: #cfd8b8;
-  --surface: #0f380f;
-  --surface-2: #1d4d1d;
-  --border: #0f380f;
-  --border-strong: #0f380f;
-  --text: #9bbc0f;
-  --text-2: #8bac0f;
-  --text-3: #7a9740;
-  --accent: #9bbc0f;
-  --accent-hover: #c9e05a;
-  --accent-deep: #9bbc0f;
-  --accent-deeper: #c9e05a;
-  --accent-soft: #1d4d1d;
-  --accent-soft-2: #2a5e2a;
-  --ring: rgba(155, 188, 15, .35);
-  --ok: #9bbc0f;
-  --err: #ff6b57;
-  --err-soft: #3a1a14;
-  --warn: #e0c34a;
-  --warn-soft: #3a3314;
-  --shadow-card: 2px 2px 0 rgba(15, 56, 15, .9);
-  --shadow-lift: 4px 4px 0 rgba(15, 56, 15, .9);
-  --radius-card: 0;
-  --radius-btn: 0;
-  --radius-input: 0;
-}
-
-body[data-theme="pixel"] {
-  background:
-    radial-gradient(#306230 1.2px, transparent 1.2px) 0 0 / 14px 14px fixed,
-    var(--bg);
-}
-
-body[data-theme="pixel"] .topbar h1,
-body[data-theme="pixel"] .sidebar-head h2,
-body[data-theme="pixel"] .card h3,
-body[data-theme="pixel"] .logs-panel h2,
-body[data-theme="pixel"] .modal h3,
-body[data-theme="pixel"] .sp-title {
-  font-family: var(--font-mono);
-  letter-spacing: .08em;
-}
-
-body[data-theme="pixel"] .topbar { background: #c6d0ac; }
-body[data-theme="pixel"] .card { border: 2px solid var(--border); }
-body[data-theme="pixel"] .card:hover {
-  transform: translate(-1px, -1px);
-  border-color: var(--border);
-  box-shadow: 4px 4px 0 rgba(15, 56, 15, .9);
-}
-body[data-theme="pixel"] .run-btn,
-body[data-theme="pixel"] .add-btn,
-body[data-theme="pixel"] .modal-save {
-  color: #0f380f;
-  border: 2px solid #0f380f;
-  border-radius: 0;
-  box-shadow: 2px 2px 0 rgba(15, 56, 15, .9);
-}
-body[data-theme="pixel"] .run-btn:hover,
-body[data-theme="pixel"] .add-btn:hover,
-body[data-theme="pixel"] .modal-save:hover {
-  box-shadow: 2px 2px 0 rgba(15, 56, 15, .9);
-  transform: translate(-1px, -1px);
-}
-body[data-theme="pixel"] .run-btn:active,
-body[data-theme="pixel"] .add-btn:active {
-  transform: translate(2px, 2px);
-  box-shadow: none;
-}
-body[data-theme="pixel"] .dot,
-body[data-theme="pixel"] .status-row .row-dot { border-radius: 0; }
-body[data-theme="pixel"] .dot.on::after { border-color: rgba(155, 188, 15, .5); }
-body[data-theme="pixel"] .badge { border-radius: 0; border-width: 2px; }
-body[data-theme="pixel"] .modal-cancel { border: 2px solid var(--border-strong); border-radius: 0; }
-body[data-theme="pixel"] .modal input { border-radius: 0; }
-body[data-theme="pixel"] .bookmark-item { border-left: 3px solid transparent; }
-body[data-theme="pixel"] .bookmark-item:hover { border-left-color: var(--accent); }
-body[data-theme="pixel"] .style-btn { border-radius: 0; }
-body[data-theme="pixel"] .sp-opt { border-radius: 0; border-width: 2px; }
-body[data-theme="pixel"] .drag-hint { color: var(--text-3); }
-body[data-theme="pixel"] ::-webkit-scrollbar-thumb { background-color: #306230; }
-body[data-theme="pixel"] ::-webkit-scrollbar-thumb:hover { background-color: #2a5e2a; }
 
 /* ---- 企业专业：正式克制 · 细线 · 祖母绿品牌色 ---- */
 body[data-theme="corporate"] {
@@ -2090,6 +2084,115 @@ body[data-icons="on"] .card-icon { display: inline-block; }
   margin-top: 6px;
 }
 
+/* ---- 设置面板：模式分段（segmented control：工作 / 娱乐）----
+   二选一，不是开关 on/off——并列两个按钮，当前模式 .active 走 accent。
+   mode 是用户态（localStorage 持久化），切换只影响卡片可见性。 */
+.sp-mode-desc {
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.45;
+  margin-bottom: 10px;
+}
+
+.mode-seg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.mode-seg-opt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  cursor: pointer;
+  font-family: var(--font-body);
+  transition: border-color .12s ease, box-shadow .12s ease, background .12s ease;
+}
+
+.mode-seg-opt:hover {
+  border-color: var(--accent);
+}
+
+.mode-seg-opt.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--ring);
+  background: var(--accent-soft);
+}
+
+.mode-seg-opt .mode-icon {
+  font-size: 18px;
+  line-height: 1;
+  color: var(--accent-deep);
+}
+
+.mode-seg-opt .mode-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* brutal 主题：模式按钮边框加粗，与 sp-opt 同款 */
+body[data-theme="brutal"] .mode-seg-opt { border-width: 2px; }
+
+/* ---- 只读模式（body[data-readonly="true"]）下视觉降级 ---- */
+/* 作用范围：设置面板的"快捷方式" / "RSS 订阅" / "外观" / "布局" / "偏好"分区（编辑类入口）—— 锁定后视觉降级 + 控件禁用。
+   拖拽手柄见 .drag-hint:disabled / 书签删除按钮见 .bm-remove:disabled（在各控件本地样式中处理）。 */
+body[data-readonly="true"] .sp-section[data-collapsible="shortcut"] .sp-content,
+body[data-readonly="true"] .sp-section[data-collapsible="rss"] .sp-content,
+body[data-readonly="true"] .sp-section[data-collapsible="appearance"] .sp-content,
+body[data-readonly="true"] .sp-section[data-collapsible="layout"] .sp-content,
+body[data-readonly="true"] .sp-section[data-collapsible="prefs"] .sp-content {
+  opacity: .45;
+  pointer-events: none;          /* 禁用所有表单交互 */
+  filter: grayscale(.4);
+}
+
+body[data-readonly="true"] .sp-section[data-collapsible="shortcut"] .sp-title-row,
+body[data-readonly="true"] .sp-section[data-collapsible="rss"] .sp-title-row,
+body[data-readonly="true"] .sp-section[data-collapsible="appearance"] .sp-title-row,
+body[data-readonly="true"] .sp-section[data-collapsible="layout"] .sp-title-row,
+body[data-readonly="true"] .sp-section[data-collapsible="prefs"] .sp-title-row {
+  cursor: not-allowed;
+  position: relative;
+}
+
+/* 锁定标记：原版在 5 个分区标题后追加 🔒 图标；用户反馈"很多地方都带一个🔒的图标这个没必要"——
+   视觉降级（opacity + grayscale + pointer-events:none）已足够表达"被锁"，
+   标题后 emoji 是冗余装饰。已移除（v0.4 反馈 3）。 */
+
+/* 设置面板"模式"区域：附只读状态说明，避免"为什么不能编辑？"的疑问 */
+body[data-readonly="true"] .sp-section[data-collapsible="mode"] .sp-mode-desc::after {
+  content: '（当前只读模式：先切到非只读模式再编辑）';
+  display: block;
+  margin-top: 4px;
+  color: var(--text-3);
+  font-style: italic;
+}
+
+/* 拖拽手柄禁用：工作模式不渲染拖拽手柄（app.js 在 renderGrid 里根据 isReadonlyMode() 跳过），
+   这里兜底：即使有 drag-hint 残留也置灰 */
+body[data-readonly="true"] .drag-hint {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* 书签删除按钮：readonly 模式下隐藏（app.js 在 renderSidebar/renderSystemCard 里跳过渲染） */
+body[data-readonly="true"] .bookmark-item .bm-remove,
+body[data-readonly="true"] .bm-item .bm-remove {
+  display: none !important;
+}
+
+/* 卡片拖拽调用阻断：readonly 模式下所有卡片不再可拖（mousedown 已被 app.js 拦截，
+   这里把视觉多余的状态清掉，避免看到游标变 grab 但拖不动） */
+body[data-readonly="true"] .card { cursor: default; }
+body[data-readonly="true"] .card .drag-hint { cursor: default; }
+
 /* ---- 设置面板开关行 ---- */
 .sp-row {
   display: flex;
@@ -2153,14 +2256,7 @@ body[data-icons="on"] .card-icon { display: inline-block; }
 
 .switch[aria-checked="true"] .switch-thumb { left: 20px; }
 
-/* 深色主题下开关滑块保持可见 */
-body[data-theme="night"] .switch-thumb,
-body[data-theme="glass"] .switch-thumb,
-body[data-theme="terminal"] .switch-thumb,
-body[data-theme="pixel"] .switch-thumb { background: #fff; }
-
 body[data-theme="brutal"] .switch { border-width: 2px; border-radius: 999px; }
-body[data-theme="pixel"] .switch { border-radius: 0; }
 
 /* ---- 设置面板：快捷方式管理 ---- */
 .sc-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
@@ -2202,6 +2298,92 @@ body[data-theme="pixel"] .switch { border-radius: 0; }
   cursor: pointer;
 }
 .sc-size-opts button.active { color: var(--accent-deep); border-color: var(--accent); background: var(--accent-soft); }
+
+/* 模式 multi-tag 组件（v5 feedback 2：UI 从 select 改为 checkbox 多选；v0.8：checkbox 完全隐藏）
+   容器 .mode-tags 通用：被用于 modal 多选 / 快捷方式列表项 / 模式管理区
+   视觉：未勾选 = 浅灰边框 + 文字；点选 = 强调色填充 + 文字 + 阴影（"亮起来"反馈） */
+.mode-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.mode-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  font-size: 11.5px;
+  font-family: var(--font-body);
+  color: var(--text-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  user-select: none;
+  transition: background .12s ease, border-color .12s ease, color .12s ease, box-shadow .12s ease, transform .12s ease;
+}
+/* v0.8：checkbox 完全视觉隐藏——点击 label 触发切换；保留 <input> 是为了无障碍性 + 表单语义 */
+.mode-tag input[type="checkbox"] {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+  margin: 0;
+}
+.mode-tag:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.mode-tag:active { transform: scale(0.96); }   /* 按下回弹，强化"点了亮起"的物理感 */
+.mode-tag.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-deep);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px var(--accent), 0 1px 4px rgba(16, 185, 129, .15);  /* v0.8：发光感 */
+}
+/* v0.8："隐藏"按钮替代 v0.7 的"全部"按钮——视觉与具体模式区分（dashed + 偏灰 + 推到右侧） */
+.mode-tag.mode-tag-hidden {
+  background: var(--bg);
+  border-style: dashed;
+  color: var(--text-3);
+  margin-left: auto;  /* 推到右侧，与具体模式按钮拉开视觉距离 */
+}
+.mode-tag.mode-tag-hidden:hover {
+  color: var(--text-2);
+  border-color: var(--border-strong);
+}
+.mode-tag.mode-tag-hidden.active {
+  background: var(--surface-2);
+  border-color: var(--text-3);
+  border-style: solid;
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px var(--border-strong);  /* 不用 accent 色，用中性灰表示"非主流"状态 */
+}
+/* readonly 模式：禁用所有勾选 + 视觉降级 */
+.mode-tags.locked {
+  opacity: .4;
+  filter: grayscale(.4);
+  pointer-events: none;
+}
+
+/* 模式标签容器（用于 modal 中的 multi-tag；让 input 不撑满） */
+.mode-select {
+  display: block;
+  padding: 4px 0;
+}
+
+/* 快捷方式列表项内的 mode 容器（保留，方便后续扩展） */
+.sc-item-modes {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
 .sc-add-btn {
   width: 100%;
   margin: 4px 0 10px;
@@ -2265,6 +2447,7 @@ body[data-theme="pixel"] .switch { border-radius: 0; }
 .sc-item-edit {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   width: 100%;
 }
@@ -2272,6 +2455,13 @@ body[data-theme="pixel"] .switch { border-radius: 0; }
   display: flex;
   gap: 4px;
   margin-left: auto;
+}
+.sc-item-modes {
+  flex: 1;
+  min-width: 120px;
+}
+.sc-item-modes .sc-mode-opt {
+  width: 100%;
 }
 .sc-size-opt {
   font-size: 10px;
@@ -2409,4 +2599,107 @@ body[data-sidebar="off"] .expand-sidebar { display: none !important; }
   margin-right: 6px;
   vertical-align: -3px;
   flex: none;
+}
+
+/* ---- 模式管理区（v5 feedback 3）—— 统一查看 + inline 编辑所有内容 mode ----
+   v0.8：分组标题改为可点击 button（与 sp-section 视觉一致：箭头旋转 + display:none 折叠） */
+.mode-manager-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+}
+.mode-manager-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mode-manager-group-title {
+  /* v0.8：标题改为可点击 button——cursor + hover + 按钮 reset */
+  cursor: pointer;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  padding: 4px 2px;
+  width: 100%;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  font-family: var(--font-display);
+  transition: color .12s ease;
+}
+.mode-manager-group-title:hover { color: var(--accent-deep); }
+/* v0.8：分组标题内的箭头（与 sp-title-icon 视觉一致） */
+.mode-manager-group-title .sp-title-icon {
+  display: inline-block;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-3);
+  transform: rotate(90deg);   /* 展开态：朝下 */
+  transition: transform .15s ease;
+}
+/* v0.8：折叠态——列表隐藏 + 箭头朝右 */
+.mode-manager-group.collapsed .mode-manager-rows { display: none; }
+.mode-manager-group.collapsed .sp-title-icon { transform: none; }
+.mode-manager-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mode-manager-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  transition: background .12s ease;
+}
+.mode-manager-row:hover {
+  background: var(--surface-2);
+}
+.mode-manager-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: var(--text-2);
+}
+.mode-manager-icon img {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+}
+.mode-manager-name {
+  flex: none;
+  width: 110px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mode-manager-tags {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.mode-manager-tags.readonly {
+  font-style: italic;
+  color: var(--text-3);
+  padding: 3px 8px;
 }

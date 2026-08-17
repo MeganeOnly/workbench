@@ -15,18 +15,40 @@
   let bookmarks = [];
   let didaToday = null;
   let didaFocus = null;
+  let minimaxData = null;  // MiniMax Token Plan 额度（/api/minimax-coding-plan）
   let rssData = null;      // RSS 信息卡数据（/api/rss）
   let feedsList = [];      // RSS 订阅源列表（设置面板管理，/api/feeds）
+  let dshSessions = null;  // DSH 对话状态聚合（/api/dsh-sessions）：{ status: 'working'|'idle'|'offline'|'error', running, total, active }
   let searchQ = '';        // 顶栏搜索关键字（已小写；空 = 不过滤）
+  // 模式配置：启动时 fetch /api/modes 拿 modes.json；失败回退内置默认（与 server.js DEFAULT_MODES 镜像）。
+  // modes 配置是 {default, modes:[{id,name,icon,readonly,description}]}：
+  //   - readonly = true  → 进入该模式时挂全局只读态（拖拽 / 改色 / 改尺寸 / 书签 / RSS 增删拖拽 全部拦截）
+  //   - 加新模式 = 改 modes.json 一条，零代码改动（白名单校验 + 切换器动态渲染）
+  let MODES = {
+    default: 'work',
+    modes: [
+      { id: 'work', name: '工作', icon: '▣', readonly: true, description: '工作模式' },
+      { id: 'entertainment', name: '娱乐', icon: '▶', readonly: false, description: '娱乐模式' },
+    ],
+  };
+  let MODES_LOADED = false;             // 是否已从 /api/modes 拉取（防止首次渲染未拿到的竞态）
+  let currentMode = 'work';             // 当前模式：用户态，从 localStorage `workbench-mode` 读；不影响服务端
+  // 当前模式是否只读（派生自 currentMode 对应的 mode 定义）；每次切换模式时重算
+  function isReadonlyMode() {
+    const m = MODES.modes.find((x) => x.id === currentMode);
+    return !!(m && m.readonly === true);
+  }
   let workbenchOnline = false;
 
   // ---- 系统信息卡定义（内置，非 buttons.json 按钮） ----
   const SYS_CARDS = {
     'sys-balance':   { id: 'sys-balance',   name: 'DeepSeek 余额', size: 'small', kind: 'stat' },
     'sys-status':    { id: 'sys-status',    name: '系统状态',      size: 'small', kind: 'status' },
+    'sys-dsh-sessions': { id: 'sys-dsh-sessions', name: 'DSH 对话', size: 'small', kind: 'dsh-sessions' },
     'sys-bookmarks': { id: 'sys-bookmarks', name: '书签',          size: 'small', kind: 'bookmarks' },
     'sys-dida-today':{ id: 'sys-dida-today', name: '滴答今日任务', size: 'large', kind: 'dida-today' },
     'sys-dida-focus':{ id: 'sys-dida-focus', name: '滴答专注',     size: 'small', kind: 'stat' },
+    'sys-minimax':   { id: 'sys-minimax',   name: 'MiniMax 套餐',  size: 'wide',  kind: 'minimax' },
     'sys-rss':       { id: 'sys-rss',       name: 'RSS 订阅',      size: 'wide',  kind: 'rss' },
   };
 
@@ -47,6 +69,8 @@
     'sys-bookmarks': '★',
     'sys-dida-today': '今',
     'sys-dida-focus': '⏱',
+    'sys-dsh-sessions': '◉',
+    'sys-minimax': 'Ⓜ',
     'sys-rss': '≡',
   };
 
@@ -166,7 +190,7 @@
   // ---- 顺序管理 ----
   function defaultOrder() {
     const func = buttons.map(b => b.id);
-    return [...func, 'sys-balance', 'sys-status', 'sys-bookmarks', 'sys-dida-today', 'sys-dida-focus', 'sys-rss'];
+    return [...func, 'sys-balance', 'sys-status', 'sys-dsh-sessions', 'sys-bookmarks', 'sys-dida-today', 'sys-dida-focus', 'sys-minimax', 'sys-rss'];
   }
 
   function getOrder() {
@@ -184,6 +208,28 @@
     try { localStorage.setItem(ORDER_KEY, JSON.stringify(order)); } catch (e) { /* 忽略 */ }
   }
 
+  // ---- 模式匹配：按钮 / 系统卡 / 书签 / RSS 订阅源 的 mode 字段判定是否在当前模式下可见 ----
+  // mode 字段语义（与 server.js normalizeModeField 保持一致）：
+  //   undefined / null                → 全部模式可见（默认；与 buttons.json 旧字段缺失行为一致）
+  //   'work' / 'entertainment' / 自定义模式 id（modes.json 定义） → 仅该模式可见
+  //   ['work','entertainment']        → 与不写等价（少见，显式声明）
+  //   '__hidden__'                     → 所有模式都不可见（v0.8 新增；用户在 UI 上点"隐藏"按钮）
+  // 校验：未知模式 id 在白名单外视为 null（防止 modes.json 改名后旧数据卡死）
+  function modeMatches(m) {
+    if (m === '__hidden__') return false;  // v0.8：hidden sentinel 永远不匹配（任何模式都不显示）
+    if (m == null) return true;
+    // 启动早期 / 网络失败 MODES_LOADED=false 时仍能匹配内置两个白名单（向后兼容）
+    const knownIds = MODES_LOADED ? MODES.modes.map((x) => x.id) : ['work', 'entertainment'];
+    if (Array.isArray(m)) {
+      // 数组中任一已知模式 === 当前模式即匹配（与 modes.json 同步白名单）
+      const valid = m.filter((x) => knownIds.includes(x));
+      return valid.includes(currentMode);
+    }
+    if (typeof m === 'string' && knownIds.includes(m)) return m === currentMode;
+    // 未知模式 id 视为 null（兜底：modes.json 改名后旧数据不卡死）
+    return true;
+  }
+
   // ---- 卡片尺寸 ----
   function spanClass(size) {
     if (size === 'large') return 'span-large';
@@ -191,13 +237,18 @@
     return 'span-wide';
   }
 
-  // ---- 顶栏快速搜索：关键字匹配 ----
+  // ---- 顶栏快速搜索 + 模式过滤：书签同时受搜索词与当前模式约束 ----
+  // mode 字段语义与按钮一致：null/缺失 = 全部模式可见；modeMatches(bm.mode) 判定当前模式可见性
   function bmMatches(bm) {
+    if (!modeMatches(bm.mode)) return false;   // 模式不匹配则直接出局
+    if (!searchQ) return true;
     return (bm.name || '').toLowerCase().includes(searchQ) || (bm.url || '').toLowerCase().includes(searchQ);
   }
 
   function cardMatchesSearch(id) {
     if (SYS_CARDS[id]) {
+      // 模式过滤：当前模式下的卡才参与搜索
+      if (!modeMatches(SYS_CARDS[id].mode)) return false;
       if ((SYS_CARDS[id].name || '').toLowerCase().includes(searchQ)) return true;
       // 书签卡：任一书签名/网址命中即保留（卡内只显示命中的书签）
       if (id === 'sys-bookmarks') return bookmarks.some(bmMatches);
@@ -205,6 +256,8 @@
     }
     const b = buttons.find(x => x.id === id);
     if (!b) return false;
+    // 模式过滤：当前模式下的按钮才参与搜索
+    if (!modeMatches(b.mode)) return false;
     return (b.name || '').toLowerCase().includes(searchQ)
       || (b.description || '').toLowerCase().includes(searchQ)
       || (b.id || '').toLowerCase().includes(searchQ);
@@ -237,9 +290,11 @@
     const el = document.createElement('div');
     el.className = 'card ' + spanClass(size);
     el.dataset.id = id;
+    // readonly 模式（modes.json 中该模式 readonly=true）不渲染拖拽手柄——卡片不可拖动换位
+    const dragHint = isReadonlyMode() ? '' : '<span class="drag-hint" title="按住拖动换位">⠿</span>';
     el.innerHTML =
       '<div class="card-head"><h3><span class="card-icon"></span><span class="card-title"></span></h3><span class="badge"></span></div>' +
-      '<span class="drag-hint" title="按住拖动换位">⠿</span>' +
+      dragHint +
       '<button type="button" class="run-btn"></button>';
     const refs = {
       el,
@@ -269,30 +324,55 @@
     if (hit) return hit;
     const def = SYS_CARDS[id];
     const el = document.createElement('div');
+    // readonly 模式不渲染拖拽手柄（与 ensureFuncCard 同款）
+    const dragHint = isReadonlyMode() ? '' : '<span class="drag-hint" title="按住拖动换位">⠿</span>';
     el.className = 'card stat-card ' + spanClass(def.size);
     el.dataset.id = id;
     const refs = { el };
     if (id === 'sys-balance') {
       el.innerHTML =
         '<div class="card-head"><h3><span class="card-icon"></span>DeepSeek 余额</h3></div>' +
-        '<span class="drag-hint" title="按住拖动换位">⠿</span>' +
+        dragHint +
         '<div class="stat-value">查询中...</div>';
       refs.value = el.querySelector('.stat-value');
       bindCardClick(el, () => openExternal('https://platform.deepseek.com/usage'));
     } else if (id === 'sys-status') {
       el.innerHTML =
         '<div class="card-head"><h3><span class="card-icon"></span>系统状态</h3></div>' +
-        '<span class="drag-hint" title="按住拖动换位">⠿</span>' +
+        dragHint +
         '<div class="status-list">' +
         '  <div class="status-row"><span class="row-dot"></span><span class="row-label">DeepSeek Harness</span><span class="row-value">查询中</span></div>' +
         '  <div class="status-row"><span class="row-dot"></span><span class="row-label">工作台服务</span><span class="row-value">查询中</span></div>' +
         '</div>';
       refs.rows = el.querySelectorAll('.status-row');
+    } else if (id === 'sys-dsh-sessions') {
+      // DSH 对话状态卡（v0.5.2 极简收口：仅 working 渲染圆点 + meta，其它状态整段 .dsh-status 隐藏）
+      // 仅 working 圆点+文字可见；idle / offline / error / loading 时卡片塌缩到只剩标题"DSH 对话"作为静态标识符
+      el.innerHTML =
+        '<div class="card-head"><h3><span class="card-icon"></span>DSH 对话</h3></div>' +
+        dragHint +
+        '<div class="dsh-status">' +
+          '<div class="dsh-dots"></div>' +
+          '<div class="dsh-meta">—</div>' +
+        '</div>';
+      refs.status = el.querySelector('.dsh-status');
+      refs.dots = el.querySelector('.dsh-dots');
+      refs.meta = el.querySelector('.dsh-meta');
+      // 点击卡片 → 跳 DSH 3080（如果 DSH 在线；离线态 toast 警示）
+      bindCardClick(el, () => {
+        if (!dshSessions || dshSessions.status === 'offline' || dshSessions.status === 'error') {
+          showToast('DSH 当前离线，无法跳转', 'warn');
+        } else {
+          openExternal('http://127.0.0.1:3080/');
+        }
+      });
     } else if (id === 'sys-bookmarks') {
+      // readonly 模式不渲染卡片内的 + 添加按钮（add bookmark 由 CSS 兜底隐藏）
+      const addBtn = isReadonlyMode() ? '' : '<button class="add-btn" id="card-add-bookmark" title="添加书签">+</button>';
       el.innerHTML =
         '<div class="card-head"><h3><span class="card-icon"></span>书签</h3>' +
-        '<button class="add-btn" id="card-add-bookmark" title="添加书签">+</button></div>' +
-        '<span class="drag-hint" title="按住拖动换位">⠿</span>' +
+        addBtn + '</div>' +
+        dragHint +
         '<ul class="bm-card-list"></ul>';
       refs.list = el.querySelector('.bm-card-list');
       const cardAdd = el.querySelector('#card-add-bookmark');
@@ -303,13 +383,13 @@
     } else if (id === 'sys-dida-today') {
       el.innerHTML =
         '<div class="card-head"><h3><span class="card-icon"></span>滴答今日任务</h3></div>' +
-        '<span class="drag-hint" title="按住拖动换位">⠿</span>' +
+        dragHint +
         '<div class="dida-task-list"></div>';
       refs.list = el.querySelector('.dida-task-list');
     } else if (id === 'sys-dida-focus') {
       el.innerHTML =
         '<div class="card-head"><h3><span class="card-icon"></span>滴答专注</h3></div>' +
-        '<span class="drag-hint" title="按住拖动换位">⠿</span>' +
+        dragHint +
         '<div class="stat-value">—</div>';
       refs.value = el.querySelector('.stat-value');
       // 点击卡片 → 跳转滴答清单应用（优先桌面客户端：未运行则启动、已运行则置顶；
@@ -319,10 +399,48 @@
         if (app) runButton(app);
         else openExternal('https://www.dida365.com/webapp/');
       });
+    } else if (id === 'sys-minimax') {
+      el.innerHTML =
+        '<div class="card-head"><h3><span class="card-icon"></span>MiniMax 套餐</h3></div>' +
+        dragHint +
+        '<div class="mmx-body">' +
+          '<div class="mmx-row" data-window="5h">' +
+            '<div class="mmx-label">5 小时</div>' +
+            '<div class="mmx-bar"><div class="mmx-bar-fill"></div></div>' +
+            '<div class="mmx-pct">—</div>' +
+            '<div class="mmx-sub">—</div>' +
+          '</div>' +
+          '<div class="mmx-row" data-window="week">' +
+            '<div class="mmx-label">周限额</div>' +
+            '<div class="mmx-bar"><div class="mmx-bar-fill"></div></div>' +
+            '<div class="mmx-pct">—</div>' +
+            '<div class="mmx-sub">—</div>' +
+          '</div>' +
+          '<div class="mmx-meta"></div>' +
+          '<div class="mmx-alert" style="display:none"></div>' +
+        '</div>';
+      refs.rows = {
+        '5h':  {
+          row: el.querySelector('.mmx-row[data-window="5h"]'),
+          fill: el.querySelector('.mmx-row[data-window="5h"]   .mmx-bar-fill'),
+          pct: el.querySelector('.mmx-row[data-window="5h"]   .mmx-pct'),
+          sub: el.querySelector('.mmx-row[data-window="5h"]   .mmx-sub'),
+        },
+        week: {
+          row: el.querySelector('.mmx-row[data-window="week"]'),
+          fill: el.querySelector('.mmx-row[data-window="week"] .mmx-bar-fill'),
+          pct: el.querySelector('.mmx-row[data-window="week"] .mmx-pct'),
+          sub: el.querySelector('.mmx-row[data-window="week"] .mmx-sub'),
+        },
+      };
+      refs.meta = el.querySelector('.mmx-meta');
+      refs.alert = el.querySelector('.mmx-alert');
+      refs.value = el.querySelector('.stat-value'); // 错误态用
+      bindCardClick(el, () => openExternal('https://platform.minimaxi.com/console/personal-info'));
     } else if (id === 'sys-rss') {
       el.innerHTML =
         '<div class="card-head"><h3><span class="card-icon"></span>RSS 订阅</h3></div>' +
-        '<span class="drag-hint" title="按住拖动换位">⠿</span>' +
+        dragHint +
         '<div class="rss-list"></div>';
       refs.list = el.querySelector('.rss-list');
     }
@@ -488,19 +606,23 @@
       });
     } else if (id === 'sys-bookmarks') {
       refs.list.innerHTML = '';
-      // 搜索时只显示命中的书签（卡片本身是否可见由 renderGrid 的搜索过滤决定）
-      const shown = searchQ ? bookmarks.filter(bmMatches) : bookmarks;
+      // 卡片墙：mode 优先过滤，搜索词叠加（与侧栏同款语义；6 条上限）
+      const modeFiltered = bookmarks.filter((bm) => modeMatches(bm.mode));
+      const shown = searchQ ? modeFiltered.filter(bmMatches) : modeFiltered;
       if (!shown.length) {
         const li = document.createElement('li');
         li.className = 'bm-card-empty';
-        li.textContent = searchQ ? '没有匹配的书签' : '暂无书签，点侧栏 + 添加';
+        li.textContent = searchQ ? '没有匹配的书签' : (modeFiltered.length === 0 && bookmarks.length > 0 ? '当前模式下没有书签' : '暂无书签，点侧栏 + 添加');
         refs.list.appendChild(li);
         return;
       }
       shown.slice(0, 6).forEach(bm => {
+        // 卡片墙版本：<a> 链接 + ✎ 编辑按钮（hover 显示；工作模式编辑按钮隐藏）
+        const item = document.createElement('span');
+        item.className = 'bm-item';
+        item.dataset.bmId = bm.id;
         const a = document.createElement('a');
-        a.className = 'bm-item';
-        a.dataset.bmId = bm.id;
+        a.className = 'bm-name';
         a.href = bm.url;
         a.target = '_blank';
         a.rel = 'noopener';
@@ -508,8 +630,23 @@
         const fav = faviconImg(bm.url);
         if (fav) a.appendChild(fav);
         a.appendChild(document.createTextNode(bm.name));
-        a.title = bm.url + '（按住拖动排序）';
-        refs.list.appendChild(a);
+        a.title = bm.url;
+        item.appendChild(a);
+        // 编辑按钮：娱乐模式才渲染，复用 openModal(bm.id)
+        if (!isReadonlyMode()) {
+          const edit = document.createElement('button');
+          edit.type = 'button';
+          edit.className = 'bm-edit-inline bm-remove';
+          edit.textContent = '✎';
+          edit.title = '编辑（修改名称 / 网址 / 显示模式）';
+          edit.addEventListener('click', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            openModal(bm.id);
+          });
+          item.appendChild(edit);
+        }
+        refs.list.appendChild(item);
       });
     } else if (id === 'sys-dida-today') {
       // grid 布局：今日任务卡限高（每列少显示几条），避免大卡把同行的其他卡拉长
@@ -519,9 +656,167 @@
       renderDidaTodayList(refs.list, layout === 'grid' ? 5 : 8);
     } else if (id === 'sys-dida-focus') {
       renderDidaFocus(refs.value);
+    } else if (id === 'sys-dsh-sessions') {
+      renderDshSessionsCard(refs);
+    } else if (id === 'sys-minimax') {
+      renderMiniMaxCard(refs);
     } else if (id === 'sys-rss') {
       renderRssList(refs.list);
     }
+  }
+
+  // ---- MiniMax 套餐渲染：5h / 周窗口进度条 + 警示 ----
+  // 警示规则（D009 + 2026-08-16 修订）：
+  //   - 5h 剩余 < 15%：行加 .danger（标签/百分比/进度条变红）。无 alert、无红框
+  //     —— 进度条本身变红已足够表达"快耗尽"，红框与额外文字过于抢眼
+  //   - dailyPace > 3：周 row 加 .danger（无红框）+ 5h row 加 .warn + alert 文案
+  //     "周限额非常充裕..."（保留信息密度，视觉强度与 5h 统一）
+  //   - dailyPace > 2：周 row 加 .warn, .warn-strong（琥珀脉冲）+ alert 文案
+  //   - dailyPace > 1.5：周 row 加 .warn（弱高亮）
+  //   - 其他：正常
+  //   - meta 行整行隐藏：modelName 永远是 "general"（MiniMax API 固定返回，无区分度），
+  //     pace 节奏"需 X 个 5h/d 才不浪费周"孤立无上下文、用户反馈没说清楚。保留 DOM 节点
+  function formatResetAt(epochSec) {
+    if (!epochSec) return '';
+    const d = new Date(epochSec * 1000);
+    const today = new Date();
+    const isSameDay = d.getFullYear() === today.getFullYear()
+      && d.getMonth() === today.getMonth()
+      && d.getDate() === today.getDate();
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    if (isSameDay) return '重置 ' + hh + ':' + mm;
+    const dayDelta = Math.round((d.getTime() - today.getTime()) / 86400000);
+    if (dayDelta === 1) return '明日 ' + hh + ':' + mm + ' 重置';
+    if (dayDelta > 1) return dayDelta + ' 天后重置';
+    return '已重置';
+  }
+  function renderMiniMaxCard(refs) {
+    if (!minimaxData) {
+      refs.rows['5h'].pct.textContent = '读取中...';
+      refs.rows.week.pct.textContent = '';
+      refs.meta.textContent = '';
+      return;
+    }
+    if (!minimaxData.ok) {
+      refs.rows['5h'].pct.textContent = '—';
+      refs.rows.week.pct.textContent = '—';
+      refs.alert.style.display = 'block';
+      refs.alert.className = 'mmx-alert err';
+      refs.alert.textContent = '获取失败：' + (minimaxData.error || '未知');
+      refs.alert.title = minimaxData.error || '';
+      refs.meta.textContent = '';
+      return;
+    }
+    const windows = minimaxData.windows || {};
+    const w5h = windows['5h'];
+    const wweek = windows.week;
+    const now = Date.now();
+
+    // 5h 窗口
+    if (w5h && w5h.remainingPct != null) {
+      const pct5 = w5h.remainingPct;
+      refs.rows['5h'].fill.style.width = pct5.toFixed(1) + '%';
+      refs.rows['5h'].pct.textContent = pct5.toFixed(0) + '% 剩';
+      const resetText5h = formatResetIn(w5h.resetAt, now);
+      refs.rows['5h'].sub.textContent = resetText5h;
+      refs.rows['5h'].row.title = '5 小时窗口 · 剩余 ' + pct5.toFixed(1) + '% · ' + resetText5h;
+    } else {
+      refs.rows['5h'].fill.style.width = '0%';
+      refs.rows['5h'].pct.textContent = '—';
+      refs.rows['5h'].sub.textContent = '';
+      refs.rows['5h'].row.title = '';
+    }
+    // 周窗口
+    if (wweek && wweek.remainingPct != null) {
+      const pctW = wweek.remainingPct;
+      refs.rows.week.fill.style.width = pctW.toFixed(1) + '%';
+      refs.rows.week.pct.textContent = pctW.toFixed(0) + '% 剩';
+      const resetTextWeek = formatResetIn(wweek.resetAt, now);
+      refs.rows.week.sub.textContent = resetTextWeek;
+      refs.rows.week.row.title = '周限额 · 剩余 ' + pctW.toFixed(1) + '% · ' + resetTextWeek;
+    } else {
+      refs.rows.week.fill.style.width = '0%';
+      refs.rows.week.pct.textContent = '—';
+      refs.rows.week.sub.textContent = '';
+      refs.rows.week.row.title = '';
+    }
+
+    // 警示判断（核心逻辑：D009）
+    //   ratio = 周限额相当于多少个 5h 限额（默认 10，按用户描述；可在 config.json 的
+    //   minimaxWeeklyHourlyRatio 覆盖）。weeklyRemainingInHours = pW × ratio 即"周剩余相当于
+    //   多少个 5h 限额"；daysToReset = 距周重置的天数；dailyPaceNeeded = weeklyRemainingInHours /
+    //   daysToReset —— 即"按当前周剩余量，平均每天需要用几个 5h 限额才不会浪费周限额"。
+    //   - dailyPaceNeeded > 3：高级警示 .danger（红）："每天 3 个 5h 都不够消耗周限额"
+    //   - dailyPaceNeeded > 2：中级警示 .warn（琥珀）："每天需用 2 个 5h 才能不浪费周"
+    //   - 否则正常（仍显示 dailyPaceNeeded，让用户掌握节奏）
+    const ratio = (minimaxData && minimaxData.weeklyHourlyRatio) || 10;
+    const pct5h = w5h ? w5h.remainingPct : null;
+    const pctW  = wweek ? wweek.remainingPct : null;
+    refs.rows['5h'].row.classList.remove('warn', 'danger', 'warn-strong');
+    refs.rows.week.row.classList.remove('warn', 'danger', 'warn-strong');
+    refs.alert.style.display = 'none';
+    refs.alert.className = 'mmx-alert';
+    refs.alert.textContent = '';
+    refs.alert.title = '';
+
+    let dailyPace = null;
+    let daysToReset = null;
+    if (pctW != null && wweek && wweek.resetAt) {
+      const ms = wweek.resetAt * 1000 - now;
+      daysToReset = Math.max(0.1, ms / 86400000);
+      const weeklyRemainingInHours = (pctW / 100) * ratio;
+      dailyPace = weeklyRemainingInHours / daysToReset;
+    }
+
+    // meta 行整行隐藏（2026-08-16）：DOM 保留便于未来恢复
+    refs.meta.style.display = 'none';
+
+    let alertKind = null;
+    let alertMsg = '';
+    // 优先级 1：5h 限额快耗尽——仅行高亮，无 alert、无红框（2026-08-16）
+    if (pct5h != null && pct5h < 15) {
+      refs.rows['5h'].row.classList.add('danger');
+    } else if (dailyPace != null && dailyPace > 3) {
+      // 优先级 2：周限额非常充裕（高级警示·红）—— 保留 alert，去掉红框（2026-08-16）
+      alertKind = 'danger';
+      alertMsg = '周限额非常充裕：按当前剩余，每天需用 ' + dailyPace.toFixed(1) + ' 个 5h 限额（3 个都不够）。现在应高强度使用 5h 窗口，否则周限额必浪费';
+      refs.rows.week.row.classList.add('danger');
+      refs.rows['5h'].row.classList.add('warn');
+    } else if (dailyPace != null && dailyPace > 2) {
+      // 优先级 3：周限额在浪费（中级警示·琥珀）
+      alertKind = 'warn';
+      alertMsg = '周限额在浪费：按当前剩余，每天需用 ' + dailyPace.toFixed(1) + ' 个 5h 限额才不浪费。建议接下来 5h 窗口都用满';
+      refs.rows.week.row.classList.add('warn', 'warn-strong');
+    } else if (dailyPace != null && dailyPace > 1.5) {
+      // 接近 2 倍但未到，提供参考但不强警告
+      refs.rows.week.row.classList.add('warn');
+    }
+    if (alertMsg) {
+      refs.alert.style.display = 'block';
+      refs.alert.classList.add(alertKind === 'danger' ? 'err' : 'warn');
+      refs.alert.textContent = alertMsg;
+      refs.alert.title = alertMsg;
+    }
+    // 正常态不再写入 pace 节奏（meta 行整体 display:none；2026-08-16）
+  }
+
+  // 重置时间显示：「3h2m」「2天 5h」
+  function formatResetIn(epochSec, now) {
+    if (!epochSec) return '';
+    const ms = epochSec * 1000 - now;
+    if (ms <= 0) return '已重置';
+    const mins = Math.floor(ms / 60000);
+    const days = Math.floor(mins / 1440);
+    const rh = Math.floor((mins % 1440) / 60);
+    const rm = mins % 60;
+    if (days >= 1) {
+      return days + '天' + (rh > 0 ? rh + 'h' : '') + '后';
+    }
+    if (mins >= 60) {
+      return Math.floor(mins / 60) + 'h' + (rm > 0 ? rm + 'm' : '') + '后';
+    }
+    return mins + 'm 后';
   }
 
   // ---- 滴答今日任务列表渲染（小组件样式：全天 / 定时 两列，各带时间 + 优先级色点 + 标签） ----
@@ -701,6 +996,159 @@
     valueEl.textContent = parts.join(' ');
   }
 
+  // ---- DSH 对话状态卡渲染（v0.6.2 二态可见：working / pending；移除 unread） ----
+  // 状态语义（与 server.js fetchDshSessions 对齐；DSH 3080 session.list 只暴露这些字段）：
+  //   working  → 旋转琥珀圆点，每会话一个（最多 DSH_DOTS_MAX，超出 +N）
+  //   pending  → 1 个琥珀静态圆点（不旋转）：plan.pending=true + !running（极少见）
+  //   其它（truly idle / offline / blank / error） → 整段 .dsh-status 隐藏，卡片只剩标题
+  // 历史：v0.6 三态（working/unread/pending）→ v0.6.2 移除 unread（用户反馈"agent 之前有产出但你没看的"不实用，移除）
+  // 设计：v0.5 模仿 DSH 会话栏圆点语言 → v0.5.1/2 收紧 meta / 隐藏 idle → v0.6 → v0.6.2 砍掉 unread
+  // 技术限制：session.list 不暴露 ask_user_question / session.error → 这两类不可见
+  const DSH_DOTS_MAX = 6;  // working 圆点上限
+  function sessionLabel(a) {
+    return (a && (a.title || a.cwd || (a.sessionId ? a.sessionId.slice(0, 8) : ''))) || '';
+  }
+  function appendDot(dotsEl, className, title) {
+    const dot = document.createElement('span');
+    dot.className = className;
+    if (title) dot.title = title;
+    dotsEl.appendChild(dot);
+  }
+  function renderDshSessionsCard(refs) {
+    if (!refs || !refs.status || !refs.dots || !refs.meta) return;
+    const statusEl = refs.status;
+    const dotsEl = refs.dots;
+    const metaEl = refs.meta;
+    // 清空旧圆点（keyed 渲染复用 DOM，必须清；否则多次轮询后圆点累加）
+    while (dotsEl.firstChild) dotsEl.removeChild(dotsEl.firstChild);
+    metaEl.textContent = '';
+    metaEl.title = '';
+    if (!dshSessions) {
+      statusEl.style.display = 'none';  // 首轮未到：与 truly idle 同处理
+      return;
+    }
+    const running = dshSessions.running || 0;
+    const pendingCount = dshSessions.pendingCount || 0;
+    const hasSignal = running > 0 || pendingCount > 0;
+    if (!hasSignal) {
+      // truly idle / offline / blank / error：无任何活动态信号 → 整段隐藏
+      statusEl.style.display = 'none';
+      return;
+    }
+    // 有信号：整段显示
+    statusEl.style.display = '';
+    // 1) working 圆点（旋转琥珀，每会话一个，上限 DSH_DOTS_MAX）
+    const active = dshSessions.active || [];
+    const visibleWorking = Math.min(active.length, DSH_DOTS_MAX);
+    for (let i = 0; i < visibleWorking; i++) {
+      appendDot(dotsEl, 'dsh-dot working', sessionLabel(active[i]) || null);
+    }
+    if (active.length > DSH_DOTS_MAX) {
+      const more = document.createElement('span');
+      more.className = 'dsh-dot-count';
+      more.textContent = '+' + (active.length - DSH_DOTS_MAX);
+      more.title = active.slice(DSH_DOTS_MAX).map(sessionLabel).filter(Boolean).join('、');
+      dotsEl.appendChild(more);
+    }
+    // 2) pending 单圆点（琥珀静态，不旋转；与 working 区分）
+    if (pendingCount > 0) {
+      const pendingList = dshSessions.pending || [];
+      const titleParts = pendingList.map(sessionLabel).filter(Boolean);
+      const title = (titleParts.length ? titleParts.slice(0, 5).join('、') + (titleParts.length > 5 ? '…' : '') : pendingCount + ' 个待确认');
+      appendDot(dotsEl, 'dsh-dot pending', title);
+    }
+    // 3) meta：聚合各状态计数（"N 个工作 · P 个待确认"）
+    const parts = [];
+    if (running > 0) parts.push(running + ' 个工作');
+    if (pendingCount > 0) parts.push(pendingCount + ' 个待确认');
+    metaEl.textContent = parts.join(' · ');
+    // meta hover 聚合 active + pending 标题
+    const allTitles = []
+      .concat(active.map(sessionLabel))
+      .concat((dshSessions.pending || []).map(sessionLabel))
+      .filter(Boolean);
+    metaEl.title = allTitles.slice(0, 10).join('、') + (allTitles.length > 10 ? '…' : '');
+  }
+
+  // ---- 模式 multi-tag 组件（v5 feedback 2：UI 从单选 select 改为多选 checkbox；v0.8：全部→隐藏） ----
+  // currentMode 接受四态：null / undefined / []    → "全部模式可见"（无勾选，默认）
+  //                        字符串（非 __hidden__） → 仅该模式可见
+  //                        字符串数组              → 这些模式都可见
+  //                        '__hidden__'             → 所有模式都不显示（用户点"隐藏"按钮）
+  // onChange(newMode) 回调：null（全部）/ 字符串数组（被选模式）/ '__hidden__'（隐藏）
+  // 互斥：勾选"隐藏" = 清空所有具体模式；勾选任意具体模式 = 取消"隐藏"
+  // v0.8 视觉调整：checkbox input 完全隐藏（CSS），label 点击触发切换；.mode-tag.active 亮起即状态
+  // readonly 模式：整体 disable（不触发 onChange；调用方仍可批量改 metadata）
+  function renderModeTags(currentMode, onChange) {
+    const wrap = document.createElement('div');
+    wrap.className = 'mode-tags';
+    // v0.8：'__hidden__' 是与"具体模式"互斥的第四态
+    const isHidden = currentMode === '__hidden__';
+    const selected = new Set();
+    if (!isHidden && Array.isArray(currentMode)) {
+      currentMode.forEach((m) => { if (typeof m === 'string' && m !== '__hidden__') selected.add(m); });
+    } else if (!isHidden && typeof currentMode === 'string' && currentMode) {
+      selected.add(currentMode);
+    }
+    // null/空/缺省 → selected 为空 = 默认（全部模式可见）
+
+    // "隐藏"按钮：与具体模式互斥（v0.8 替代 v0.7 的"全部"按钮——用户原话"全部感觉就没用了，但是来一个隐藏还是有价值"）
+    const hiddenTag = document.createElement('label');
+    hiddenTag.className = 'mode-tag mode-tag-hidden' + (isHidden ? ' active' : '');
+    hiddenTag.innerHTML = '<input type="checkbox"' + (isHidden ? ' checked' : '') + '> <span>隐藏</span>';
+    hiddenTag.title = '勾上后此内容在所有模式下都不显示';
+    const hiddenCb = hiddenTag.querySelector('input');
+    hiddenCb.addEventListener('change', () => {
+      if (hiddenCb.checked) {
+        // 勾上"隐藏" → 清空所有具体模式勾选 + 设为 __hidden__
+        wrap.querySelectorAll('.mode-tag[data-mode-id]').forEach((el) => {
+          el.classList.remove('active');
+          const cb = el.querySelector('input');
+          if (cb) cb.checked = false;
+        });
+        onChange('__hidden__');
+      } else {
+        // 取消"隐藏" → 回到默认（全部模式可见）
+        onChange(null);
+      }
+    });
+    wrap.appendChild(hiddenTag);
+
+    // 具体模式按钮（保持不变）
+    for (const m of MODES.modes) {
+      const tag = document.createElement('label');
+      tag.className = 'mode-tag' + (selected.has(m.id) ? ' active' : '');
+      tag.dataset.modeId = m.id;
+      tag.title = (m.description || m.name) + (m.readonly ? '（只读模式）' : '');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = selected.has(m.id);
+      const label = document.createElement('span');
+      label.textContent = m.name;
+      tag.appendChild(cb);
+      tag.appendChild(label);
+      cb.addEventListener('change', () => {
+        // 勾选任意具体模式 → 取消"隐藏"勾选（互斥）
+        if (cb.checked) {
+          hiddenTag.classList.remove('active');
+          hiddenCb.checked = false;
+        }
+        tag.classList.toggle('active', cb.checked);
+        // 收敛：当前所有勾选 → 字符串数组
+        const checked = [...wrap.querySelectorAll('.mode-tag[data-mode-id] input:checked')]
+          .map((c) => c.parentElement.dataset.modeId);
+        onChange(checked.length ? checked : null);
+      });
+      wrap.appendChild(tag);
+    }
+    // readonly 模式：禁用所有勾选（CSS 视觉降级 + JS 拦截）
+    if (isReadonlyMode()) {
+      wrap.classList.add('locked');
+      wrap.querySelectorAll('input').forEach((cb) => { cb.disabled = true; });
+    }
+    return wrap;
+  }
+
   // ---- RSS 信息卡渲染（每个源一个小标题 + 最新条目链接列表） ----
   function fmtRssDate(ts) {
     if (!ts) return '';
@@ -718,14 +1166,18 @@
       listEl.appendChild(p);
       return;
     }
-    if (!rssData.feeds || !rssData.feeds.length) {
+    // 按 mode 过滤（feedsList 含 mode 字段，rssData.feeds 含抓取后的内容）——
+    // 服务端 /api/rss 不感知 mode（currentMode 是客户端态），前端按 feedsList 列表过滤
+    const modeMap = new Map((feedsList || []).map((f) => [f.id, f.mode]));
+    const visibleFeeds = (rssData.feeds || []).filter((f) => modeMatches(modeMap.get(f.id)));
+    if (!visibleFeeds.length) {
       const p = document.createElement('div');
       p.className = 'rss-item rss-empty';
-      p.textContent = '暂无订阅源：样式 → RSS 订阅 中添加';
+      p.textContent = (rssData.feeds || []).length > 0 ? '当前模式下没有订阅源' : '暂无订阅源：样式 → RSS 订阅 中添加';
       listEl.appendChild(p);
       return;
     }
-    for (const f of rssData.feeds) {
+    for (const f of visibleFeeds) {
       const h = document.createElement('div');
       h.className = 'rss-feed-title' + (f.ok === false ? ' err' : '') + (f.stale ? ' stale' : '');
       h.textContent = f.name || f.feedTitle || f.url;
@@ -775,6 +1227,19 @@
     renderGrid();
   }
 
+  // ---- DSH 对话状态轮询（feedback 2：state 变化在卡片里"亮"） ----
+  // 5 秒一次（与 push 卡片同款节奏，状态有变化即可见）。
+  // 失败时不 renderGrid（避免抖动），只更新全局状态 + 重渲当前卡片（如果已渲染）。
+  async function refreshDshSessions() {
+    try {
+      dshSessions = await fetchJSON('/api/dsh-sessions');
+    } catch (e) {
+      dshSessions = { ok: false, status: 'error', error: String(e && e.message || e), running: 0, total: 0, active: [] };
+    }
+    // 仅触发该卡片的重渲（不影响其它卡片）
+    renderSystemCard('sys-dsh-sessions');
+  }
+
   // ---- 全量渲染（keyed：复用节点，按序 append 实现排序） ----
   function renderGrid() {
     if (dragActive) return; // 拖拽中跳过，避免重排打断手势
@@ -783,12 +1248,16 @@
     const sideCol = document.getElementById('side-col');
     for (const id of order) {
       if (SYS_CARDS[id]) {
+        // 模式过滤：当前模式下的卡才渲染（mode 是用户态，与 dida visible 正交）
+        if (!modeMatches(SYS_CARDS[id].mode)) continue;
         // RSS 卡按偏好开关显隐（off 时不渲染不占位，等同未安装）
         if (id === 'sys-rss' && (document.body.dataset.rss || 'on') === 'off') continue;
         ensureSystemCard(id);
         renderSystemCard(id);
       } else {
         const b = buttons.find(x => x.id === id);
+        // 模式过滤：当前模式下的按钮才渲染（mode 是用户态）
+        if (b && !modeMatches(b.mode)) continue;
         // dida 卡片按 visible 显隐：未到点 / 今天已点过 → 不渲染（卡片隐藏，次日或到点自动恢复）
         if (b && b.visible !== false) renderFuncCard(b);
       }
@@ -809,9 +1278,19 @@
     for (const id of order) {
       const rec = cardCache.get(id);
       if (!rec) continue;
-      // 隐藏不可见的 dida 卡片：从 DOM 移除（保留 cardCache 与顺序位，恢复可见时原地回来）
+      // 模式过滤：从 DOM 移除（保留 cardCache 与顺序位，切换模式时原地回来）
+      if (SYS_CARDS[id] && !modeMatches(SYS_CARDS[id].mode)) {
+        rec.el.remove();
+        continue;
+      }
       const b = buttons.find(x => x.id === id);
-      if (b && b.kind === 'dida' && b.visible === false) {
+      if (b && !modeMatches(b.mode)) {
+        rec.el.remove();
+        continue;
+      }
+      // 隐藏不可见的 dida 卡片：从 DOM 移除（保留 cardCache 与顺序位，恢复可见时原地回来）
+      const b2 = buttons.find(x => x.id === id);
+      if (b2 && b2.kind === 'dida' && b2.visible === false) {
         rec.el.remove();
         continue;
       }
@@ -897,6 +1376,9 @@
 
   document.addEventListener('mousedown', (e) => {
     if (e.target.closest('.bm-item')) return; // 书签项（含书签卡内）不触发卡片拖拽
+    // readonly 模式（modes.json 该模式 readonly=true）禁止拖拽卡片换位，
+    // 即便 .drag-hint 由于 CSS 残留也可见也直接 return（CSS 兜底 + JS 双保险）
+    if (isReadonlyMode()) return;
     // 仅 ⠿ 手柄（.drag-hint）进入卡片拖拽；卡片其余区域（含 run-btn、标题、描述）
     // 不再经过拖拽判定，click 必达——曾因"整卡可拖 + 6px 阈值"把正常点击误判为拖拽、
     // suppressClick 吞掉 click，导致按钮"点了没反应"
@@ -1103,6 +1585,7 @@
     }
     renderGrid();
     renderShortcutList(); // 快捷方式管理列表（设置面板）随按钮数据刷新
+    renderModeManager(); // v5 feedback 3：模式管理区跟随数据刷新
   }
 
   // ---- 刷新队列条数 ----
@@ -1141,6 +1624,16 @@
       didaFocus = await fetchJSON('/api/dida-focus');
     } catch (e) {
       didaFocus = { ok: false, error: '无法获取' };
+    }
+    renderGrid();
+  }
+
+  // ---- 刷新 MiniMax Token Plan 额度（5 分钟轮询，限额变动较慢） ----
+  async function refreshMiniMax() {
+    try {
+      minimaxData = await fetchJSON('/api/minimax-coding-plan');
+    } catch (e) {
+      minimaxData = { ok: false, error: '无法获取' };
     }
     renderGrid();
   }
@@ -1239,16 +1732,19 @@
     }
     renderSidebarBookmarks();
     renderGrid();
+    renderModeManager(); // v5 feedback 3：模式管理区跟随数据刷新
   }
 
-  // 侧栏书签渲染（独立出来供搜索过滤复用：有搜索词时只显示命中的书签）
+  // 侧栏书签渲染（独立出来供搜索过滤 + 模式过滤复用）
+  // 过滤顺序：mode 优先（先把当前模式不命中的全部剔掉）→ 再看搜索词
   function renderSidebarBookmarks() {
     bookmarkList.innerHTML = '';
-    const shown = searchQ ? bookmarks.filter(bmMatches) : bookmarks;
+    const modeFiltered = bookmarks.filter((bm) => modeMatches(bm.mode));
+    const shown = searchQ ? modeFiltered.filter(bmMatches) : modeFiltered;
     if (!shown.length) {
       const li = document.createElement('li');
       li.className = 'bookmark-empty';
-      li.textContent = searchQ ? '没有匹配的书签' : '暂无书签，点 + 添加';
+      li.textContent = searchQ ? '没有匹配的书签' : (modeFiltered.length === 0 && bookmarks.length > 0 ? '当前模式下没有书签' : '暂无书签，点 + 添加');
       bookmarkList.appendChild(li);
       return;
     }
@@ -1274,25 +1770,48 @@
         a.rel = 'noopener';
         li.appendChild(a);
 
-        const del = document.createElement('button');
-        del.className = 'bm-del';
-        del.textContent = 'x';
-        del.title = '删除';
-        del.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          e.preventDefault();
-          if (!confirm('删除书签「' + bm.name + '」？')) return;
-          try {
-            await fetchJSON('/api/bookmarks/' + encodeURIComponent(bm.id), { method: 'DELETE' });
-            refreshBookmarks();
-          } catch (err) {
-            alert('删除失败: ' + err.message);
-          }
-        });
-        li.appendChild(del);
+        // 工作模式只读：删除 + 编辑按钮仅在娱乐模式渲染（CSS body[data-readonly="true"] 兜底）
+        if (!isReadonlyMode()) {
+          // 编辑按钮（✎）：调 openModal(bm.id) 复用 modal（预填字段）
+          const edit = document.createElement('button');
+          edit.className = 'bm-edit bm-remove';
+          edit.textContent = '✎';
+          edit.title = '编辑书签（修改名称 / 网址 / 显示模式）';
+          edit.addEventListener('click', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            openModal(bm.id);
+          });
+          li.appendChild(edit);
+          const del = document.createElement('button');
+          del.className = 'bm-del bm-remove';
+          del.textContent = 'x';
+          del.title = '删除';
+          del.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            if (!confirm('删除书签「' + bm.name + '」？')) return;
+            try {
+              await fetchJSON('/api/bookmarks/' + encodeURIComponent(bm.id), { method: 'DELETE' });
+              refreshBookmarks();
+            } catch (err) {
+              alert('删除失败: ' + err.message);
+            }
+          });
+          li.appendChild(del);
+        }
+
+        // 模式标签不展示（用户反馈"既然切换到娱乐是娱乐也很正常"，不需要被提醒）
+        // 服务端依然返回 mode 字段，仅作过滤依据；编辑入口在书签 modal（feedback 5）
 
         bookmarkList.appendChild(li);
     }
+  }
+
+  // 模式 id → 中文标签（找不到回退 id 本身）
+  function modeLabel(id) {
+    const m = MODES.modes.find((x) => x.id === id);
+    return m ? m.name : id;
   }
 
   // ---- 书签拖拽排序（指针事件实现：按住书签项任意位置拖动，位移 >6px 进入拖拽；轻点 = 打开/删除）
@@ -1310,6 +1829,8 @@
   document.addEventListener('mousedown', (e) => {
     const item = e.target.closest('.bm-item');
     if (!item || e.button !== 0) return;
+    // readonly 模式禁止书签拖拽换位（cs 已在 .bm-drag 隐藏；这里 JS 双保险）
+    if (isReadonlyMode()) return;
     bmDrag = { el: item, startX: e.clientX, startY: e.clientY, active: false };
   });
 
@@ -1379,15 +1900,50 @@
     refreshBookmarks();
   }
 
-  function openModal() {
-    bmName.value = '';
-    bmUrl.value = '';
+  // 书签 modal 的 mode multi-tag 容器（v5 feedback 2：从 select 改为 checkbox 多选）
+  const bmModeSelect = document.getElementById('bm-mode');
+  const bmModalTitle = document.getElementById('bm-modal-title');
+  const bmSaveBtn = document.getElementById('bm-save');
+  // 当前 modal 操作类型：null = 新增；否则 = 编辑的书签 id
+  let bmEditId = null;
+  // 当前 modal 选中的模式（null = 全部模式；字符串数组 = 这些模式可见）
+  let bmModalMode = null;
+
+  // 打开书签 modal：editId=null 走"新增"；editId=书签 id 走"编辑"（预填字段）
+  function openModal(editId) {
+    // 工作模式（只读）禁止编辑书签——CSS pointer-events:none + bm-edit 隐藏兜底
+    if (editId && isReadonlyMode()) {
+      showToast('当前模式只读，请先切换到娱乐模式再编辑书签', 'warn');
+      return;
+    }
+    bmEditId = editId || null;
+    modal.dataset.editId = bmEditId || '';
+    if (bmModalTitle) bmModalTitle.textContent = bmEditId ? '编辑书签' : '添加书签';
+    if (bmSaveBtn) bmSaveBtn.textContent = bmEditId ? '保存修改' : '保存';
+    // 预填字段（编辑模式从 bookmarks 缓存读）
+    let preset = null;
+    if (bmEditId) {
+      preset = bookmarks.find((b) => b.id === bmEditId) || null;
+    }
+    bmName.value = preset ? preset.name : '';
+    bmUrl.value = preset ? preset.url : '';
+    // 预填 mode（编辑模式读取现有值；新增模式默认 null = 全部模式可见）
+    bmModalMode = (preset && preset.mode != null) ? preset.mode : null;
+    // 动态渲染 multi-tag 组件（每次打开 modal 都重建——标记语义清晰、避免上一次打开残留）
+    if (bmModeSelect) {
+      bmModeSelect.innerHTML = '';
+      bmModeSelect.appendChild(renderModeTags(bmModalMode, (newMode) => {
+        bmModalMode = newMode;
+      }));
+    }
     modal.classList.remove('hidden');
     bmName.focus();
   }
 
   function closeModal() {
     modal.classList.add('hidden');
+    bmEditId = null;
+    modal.dataset.editId = '';
   }
 
   async function saveBookmark() {
@@ -1398,20 +1954,33 @@
       return;
     }
     if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+    // mode：multi-tag 实时回调更新 bmModalMode（null = 全部模式；数组 = 这些模式可见）
+    const mode = bmModalMode;
     try {
-      const data = await fetchJSON('/api/bookmarks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, url }),
-      });
+      let data;
+      if (bmEditId) {
+        // 编辑：PATCH /api/bookmarks/<id>（仅传变化的字段，name/url/mode 全传为简单）
+        data = await fetchJSON('/api/bookmarks/' + encodeURIComponent(bmEditId), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, url, mode }),
+        });
+      } else {
+        // 新增：POST /api/bookmarks
+        data = await fetchJSON('/api/bookmarks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, url, mode }),
+        });
+      }
       if (data.ok) {
         closeModal();
         refreshBookmarks();
       } else {
-        alert('添加失败: ' + (data.error || '未知错误'));
+        alert((bmEditId ? '修改' : '添加') + '失败: ' + (data.error || '未知错误'));
       }
     } catch (e) {
-      alert('添加失败: ' + e.message);
+      alert((bmEditId ? '修改' : '添加') + '失败: ' + e.message);
     }
   }
 
@@ -1471,6 +2040,7 @@
   const ICONS_KEY = 'workbench-icons';
   const SEARCH_KEY = 'workbench-search';
   const RSS_KEY = 'workbench-rss';
+  const MODE_KEY = 'workbench-mode';
   const styleBtn = document.getElementById('style-btn');
   const stylePanel = document.getElementById('style-panel');
 
@@ -1494,6 +2064,18 @@
       const el = document.getElementById(id);
       if (el) el.setAttribute('aria-checked', String(on));
     }
+    // 模式：白名单校验（基于 MODES；启动早期 MODES_LOADED=false 时用内置默认 work）
+    let m = localStorage.getItem(MODE_KEY);
+    const knownIds = MODES_LOADED ? MODES.modes.map((x) => x.id) : ['work'];
+    if (!knownIds.includes(m)) m = MODES_LOADED ? MODES.default : 'work';
+    currentMode = m;
+    document.body.dataset.mode = currentMode;
+    // 只读态：mode.readonly = true 时挂到 body[data-readonly]，CSS 据此降级所有编辑控件
+    document.body.dataset.readonly = isReadonlyMode() ? 'true' : 'false';
+    // 同步设置面板切换器的激活态（顶栏切换器已移除）
+    document.querySelectorAll('.mode-seg-opt[data-mode]').forEach(el => {
+      el.classList.toggle('active', el.dataset.mode === currentMode);
+    });
     document.querySelectorAll('.sp-opt[data-theme-opt]').forEach(el => {
       el.classList.toggle('active', el.dataset.themeOpt === theme);
     });
@@ -1505,7 +2087,108 @@
     if ((document.body.dataset.rss || 'on') === 'on' && !rssData) refreshRss();
   }
 
+  // ---- 模式切换（设置面板 segmented control + 顶栏 mode-switcher 共用）----
+  // mode 是用户态，localStorage 持久化；切换即时重渲染（renderGrid 按 mode 过滤）。
+  // 接受任意合法模式 id（白名单校验，未知 id 静默忽略），未来 modes.json 加新模式无需改这里。
+  function setMode(v) {
+    const knownIds = MODES_LOADED ? MODES.modes.map((x) => x.id) : ['work'];
+    if (!knownIds.includes(v)) return;
+    if (v === currentMode) return;
+    currentMode = v;
+    localStorage.setItem(MODE_KEY, v);
+    applyStyle();
+    // 同步已有卡片的 drag-hint 显隐（keyed 缓存复用 DOM，初次渲染后不会自动重渲）
+    syncDragHintsForReadonly();
+    // 立即重渲侧栏 / 卡片墙 / RSS（按 mode 过滤），不等 10 秒轮询
+    renderSidebarBookmarks();
+    renderSystemCard('sys-bookmarks');
+    renderRssForReRender();
+    // 同步卡片墙书签 add 按钮显隐（keyed 缓存初渲决定，setMode 不破坏）
+    refreshAllCardAddBtns();
+    // RSS 卡片若已渲染，拉一次新数据（缓存内的 rssData 可能不含新加的源 / 切换后的源）
+    const rssHit = cardCache.get('sys-rss');
+    if (rssHit && (document.body.dataset.rss || 'on') === 'on') {
+      refreshRss();
+    }
+    const def = MODES.modes.find((x) => x.id === v);
+    const label = def ? def.name : v;
+    showToast('已切换到 ' + label + ' 模式' + (def && def.readonly ? '（只读）' : ''), 'ok');
+  }
+
+  // 切换模式后重新触发 RSS 卡片渲染（keyed 缓存复用 DOM，renderGrid 才会重渲染内层）
+  function renderRssForReRender() {
+    const hit = cardCache.get('sys-rss');
+    if (!hit) return;
+    const listEl = hit.refs.list;
+    if (listEl) renderRssList(listEl);
+  }
+
+  // 同步卡片墙书签 / RSS 卡的 add 按钮显隐（已渲染的按钮不会被 readonly 状态回流影响）
+  function refreshAllCardAddBtns() {
+    const readonly = isReadonlyMode();
+    document.querySelectorAll('#card-add-bookmark').forEach((el) => {
+      el.style.display = readonly ? 'none' : '';
+    });
+  }
+
+  // 同步所有 .card 的 drag-hint：readonly 模式删除（DOM 移除而非 CSS 隐藏，
+  // 避免无意义节点残留；renderGrid 重建时按 isReadonlyMode() 重新决定）。
+  // 已渲染卡片（keyed 缓存复用）需要这里显式同步——setMode 切换 readonly 状态时调用。
+  function syncDragHintsForReadonly() {
+    const readonly = isReadonlyMode();
+    document.querySelectorAll('.card').forEach((card) => {
+      const has = !!card.querySelector('.drag-hint');
+      if (readonly && has) {
+        const hint = card.querySelector('.drag-hint');
+        hint.parentNode.removeChild(hint);
+      } else if (!readonly && !has) {
+        const hint = document.createElement('span');
+        hint.className = 'drag-hint';
+        hint.title = '按住拖动换位';
+        hint.textContent = '⠿';
+        // 插入到 card-head 之后（与 ensureFuncCard 渲染顺序一致）
+        const head = card.querySelector('.card-head');
+        if (head && head.nextSibling) head.parentNode.insertBefore(hint, head.nextSibling);
+        else card.appendChild(hint);
+      }
+    });
+  }
+
+  // 动态渲染模式切换器（仅设置面板 segmented control）：
+  // 根据 MODES.modes 列表生成按钮；modes.json 加新模式后自动出现。
+  // 顶栏切换器已移除（用户反馈"在外解锁太容易"——只有设置面板能切）。
+  // 设置面板的两个静态按钮（工作/娱乐）由 index.html 写死——这里清空 + 重建，保证单一真源。
+  function renderModeSwitchers() {
+    const seg = document.getElementById('mode-seg');
+    if (seg) {
+      seg.innerHTML = '';
+      for (const m of MODES.modes) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'mode-seg-opt';
+        btn.dataset.mode = m.id;
+        btn.title = (m.description || m.name) + (m.readonly ? '（只读）' : '');
+        const ic = document.createElement('span');
+        ic.className = 'mode-icon';
+        ic.innerHTML = m.icon || '';
+        const nm = document.createElement('span');
+        nm.className = 'mode-name';
+        nm.textContent = m.name;
+        btn.appendChild(ic);
+        btn.appendChild(nm);
+        if (m.id === currentMode) btn.classList.add('active');
+        seg.appendChild(btn);
+      }
+    }
+  }
+
   function setStyle(kind, value) {
+    // 只读模式（work）禁止切换主题/布局——CSS pointer-events:none 是兜底，
+    // JS 这里再做一层拦截（防止 console / 自动化绕过）
+    if (isReadonlyMode()) {
+      showToast('当前模式只读，请先切换到娱乐模式再调整外观/布局', 'warn');
+      return;
+    }
     if (kind === 'theme') localStorage.setItem(THEME_KEY, value);
     else localStorage.setItem(LAYOUT_KEY, value);
     applyStyle();
@@ -1535,11 +2218,18 @@
     if (l) { setStyle('layout', l.dataset.layoutOpt); return; }
     const sw = e.target.closest('.switch');
     if (sw && sw.id && SWITCH_IDS[sw.id]) {
+      // 只读模式禁止切换偏好（sidebar / bignum / countup / icons / search / rss）
+      if (isReadonlyMode()) {
+        showToast('当前模式只读，请先切换到娱乐模式再调整偏好', 'warn');
+        return;
+      }
       const key = SWITCH_IDS[sw.id];
       const next = localStorage.getItem(key) === 'off' ? 'on' : 'off';
       localStorage.setItem(key, next);
       applyStyle();
     }
+    const mo = e.target.closest('.mode-seg-opt[data-mode]');
+    if (mo) { setMode(mo.dataset.mode); return; }
   });
 
   // ---- 面板可折叠分区（外观/布局，收起状态持久化） ----
@@ -1562,6 +2252,7 @@
   const SHORTCUT_COLORS = ['#3b82f6', '#047857', '#0d9488', '#7c3aed', '#ea580c', '#db2777', '#64748b', '#dc2626'];
   let scColor = SHORTCUT_COLORS[0];
   let scSize = 'small';
+  let scMode = null; // 快捷方式添加表单的 mode 选择（null = 全部模式，与 bm-mode 同语义）
   let scListSig = '';
 
   function renderShortcutList() {
@@ -1670,7 +2361,7 @@
         });
         cols.appendChild(sw);
       });
-      // 第二行：颜色 + 尺寸（点击即改，无需重建）
+      // 第二行：颜色 + 尺寸 + 模式（点击即改，无需重建）
       const edit = document.createElement('div');
       edit.className = 'sc-item-edit';
       const sizes = document.createElement('div');
@@ -1703,15 +2394,45 @@
         }
       });
       sizes.appendChild(sb);
+      // 模式选择：multi-checkbox 标签（v5 feedback 2：支持多模式同时可见）
+      // 变更即 PATCH /api/buttons/update —— 写整个新模式数组（其它字段不在 PATCH）
+      const modeBox = document.createElement('div');
+      modeBox.className = 'sc-item-modes';
+      modeBox.title = '勾选要包含的模式；不勾 = 全部模式可见';
+      const tagsWrap = renderModeTags(b.mode, async (newMode) => {
+        try {
+          const r = await fetch('/api/buttons/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: b.id, mode: newMode }),
+          });
+          const res = await r.json().catch(() => ({}));
+          if (res.ok) {
+            const label = newMode === '__hidden__'
+              ? '隐藏'
+              : (newMode
+                  ? (Array.isArray(newMode) ? newMode.map(modeLabel).join('+') : modeLabel(newMode))
+                  : '全部模式');
+            showToast('已更新模式: ' + label, 'ok');
+            await refreshButtons();
+          } else {
+            showToast('改模式失败: ' + (res.error || '未知错误'), 'err');
+          }
+        } catch (e) {
+          showToast('改模式失败: ' + e.message, 'err');
+        }
+      });
+      modeBox.appendChild(tagsWrap);
       edit.appendChild(cols);
       edit.appendChild(sizes);
+      edit.appendChild(modeBox);
       li.appendChild(edit);
       ul.appendChild(li);
     }
   }
 
   // 通用添加入口（表单按钮 / 文件拖放共用），返回是否成功
-  async function addShortcut(nameVal, rawPath, color, size) {
+  async function addShortcut(nameVal, rawPath, color, size, mode) {
     let p = (rawPath || '').trim();
     // 与后端一致：自动剥掉首尾成对的双引号（地址栏/命令行复制的路径常自带）
     if (p.length >= 2 && p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1).trim();
@@ -1720,7 +2441,7 @@
       const r = await fetch('/api/buttons/add', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: nameVal, path: p, color: color, size: size }),
+        body: JSON.stringify({ name: nameVal, path: p, color: color, size: size, mode: mode != null ? mode : null }),
       });
       const res = await r.json().catch(() => ({}));
       if (res.ok) {
@@ -1761,6 +2482,14 @@
         });
       });
     }
+    // 动态填充 sc-mode multi-tag（v5 feedback 2：checkbox 多选）
+    const scModeSelect = document.getElementById('sc-mode');
+    if (scModeSelect) {
+      scModeSelect.innerHTML = '';
+      scModeSelect.appendChild(renderModeTags(scMode, (newMode) => {
+        scMode = newMode;
+      }));
+    }
     const addBtn = document.getElementById('sc-add-btn');
     if (addBtn) {
       addBtn.addEventListener('click', async () => {
@@ -1769,10 +2498,18 @@
         const pathVal = ((pathEl && pathEl.value) || '').trim();
         const nameVal = ((nameEl && nameEl.value) || '').trim();
         addBtn.disabled = true;
-        const ok = await addShortcut(nameVal, pathVal, scColor, scSize);
+        const ok = await addShortcut(nameVal, pathVal, scColor, scSize, scMode);
         if (ok) {
           if (nameEl) nameEl.value = '';
           if (pathEl) pathEl.value = '';
+          // 重置 sc-mode 多选标签：清空 + 重新渲染全部（保留"全部"勾选）
+          if (scModeSelect) {
+            scMode = null;
+            scModeSelect.innerHTML = '';
+            scModeSelect.appendChild(renderModeTags(null, (newMode) => {
+              scMode = newMode;
+            }));
+          }
         }
         addBtn.disabled = false;
       });
@@ -1856,7 +2593,7 @@
   function renderFeedsPanel() {
     const ul = document.getElementById('rss-list');
     if (!ul) return;
-    const sig = feedsList.map((f) => [f.id, f.name, f.url].join('|')).join('\n');
+    const sig = feedsList.map((f) => [f.id, f.name, f.url, f.mode != null ? (Array.isArray(f.mode) ? f.mode.join(',') : f.mode) : ''].join('|')).join('\n');
     if (sig === feedsSig && ul.childElementCount) return;
     feedsSig = sig;
     ul.innerHTML = '';
@@ -1882,32 +2619,36 @@
       pt.className = 'sc-item-path';
       pt.textContent = f.url;
       pt.title = f.url;
-      const del = document.createElement('button');
-      del.type = 'button';
-      del.className = 'sc-del';
-      del.textContent = '删除';
-      del.title = '删除订阅源 ' + f.name;
-      del.addEventListener('click', async () => {
-        del.disabled = true;
-        try {
-          const r = await fetch('/api/feeds/' + encodeURIComponent(f.id), { method: 'DELETE' });
-          const res = await r.json().catch(() => ({}));
-          if (res.ok) {
-            showToast('已删除: ' + f.name, 'ok');
-            await refreshFeedsData(true);
-          } else {
-            showToast('删除失败: ' + (res.error || '未知错误'), 'err');
-            del.disabled = false;
-          }
-        } catch (e) {
-          showToast('删除失败: ' + e.message, 'err');
-          del.disabled = false;
-        }
-      });
       row.appendChild(icon);
       row.appendChild(nm);
       row.appendChild(pt);
-      row.appendChild(del);
+      // 模式标签不展示（用户反馈"娱乐标签没必要展示"——管理面板也省去视觉噪声）
+      // 工作模式只读：不渲染删除按钮（CSS body[data-readonly="true"] .sc-del 兜底隐藏）
+      if (!isReadonlyMode()) {
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'sc-del';
+        del.textContent = '删除';
+        del.title = '删除订阅源 ' + f.name;
+        del.addEventListener('click', async () => {
+          del.disabled = true;
+          try {
+            const r = await fetch('/api/feeds/' + encodeURIComponent(f.id), { method: 'DELETE' });
+            const res = await r.json().catch(() => ({}));
+            if (res.ok) {
+              showToast('已删除: ' + f.name, 'ok');
+              await refreshFeedsData(true);
+            } else {
+              showToast('删除失败: ' + (res.error || '未知错误'), 'err');
+              del.disabled = false;
+            }
+          } catch (e) {
+            showToast('删除失败: ' + e.message, 'err');
+            del.disabled = false;
+          }
+        });
+        row.appendChild(del);
+      }
       li.appendChild(row);
       ul.appendChild(li);
     }
@@ -1923,9 +2664,19 @@
     }
     if (force) feedsSig = '';
     renderFeedsPanel();
+    renderModeManager(); // v5 feedback 3：模式管理区跟随数据刷新
   }
 
   function initRssPanel() {
+    // 动态填充 RSS 订阅源添加表单的 mode multi-tag（v5 feedback 2：checkbox 多选）
+    const rssModeSelect = document.getElementById('rss-mode');
+    let rssPanelMode = null; // 当前表单选中的模式（null = 全部模式）
+    if (rssModeSelect) {
+      rssModeSelect.innerHTML = '';
+      rssModeSelect.appendChild(renderModeTags(rssPanelMode, (newMode) => {
+        rssPanelMode = newMode;
+      }));
+    }
     const addBtn2 = document.getElementById('rss-add-btn');
     if (addBtn2) {
       addBtn2.addEventListener('click', async () => {
@@ -1933,19 +2684,21 @@
         const urlEl = document.getElementById('rss-url');
         const name = ((nameEl && nameEl.value) || '').trim();
         const url = ((urlEl && urlEl.value) || '').trim();
+        const mode = rssPanelMode; // null=全部模式 或 字符串数组
         if (!name || !url) { showToast('名称和地址都不能为空', 'err'); return; }
         addBtn2.disabled = true;
         try {
           const r = await fetch('/api/feeds', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, url }),
+            body: JSON.stringify({ name, url, mode }),
           });
           const res = await r.json().catch(() => ({}));
           if (res.ok) {
             showToast('已添加订阅源: ' + name, 'ok');
             if (nameEl) nameEl.value = '';
             if (urlEl) urlEl.value = '';
+            if (modeEl) modeEl.value = '';
             await refreshFeedsData(true);
             await refreshRss(); // 立即抓一次，卡片马上有内容
           } else {
@@ -1974,11 +2727,226 @@
     refreshFeedsData();
   }
 
+  // ---- 模式管理区（v5 feedback 3）—— 统一查看 + inline 编辑所有内容mode 字段 ----
+  // 3 类：功能按钮（普通按钮，排除 dida/push/toggle/系统卡） / 书签 / RSS 源
+  // 每行展示：图标 + 名称 + 当前模式标签 + multi-tag 编辑器（实时 PATCH/POST）
+  // 持久化：刷新按钮/书签/RSS 后重新拉取并重渲染（refreshButtons/refreshBookmarks/refreshFeedsData 都在 init 末轮询）
+  // 注：手动配置的普通按钮只能看到，不能在这里编辑（buttons.json 是配置文件，没 UI 入口）
+  function initModeManager() {
+    renderModeManager();
+  }
+
+  function renderModeManager() {
+    const root = document.getElementById('mode-manager-list');
+    if (!root) return;
+    root.innerHTML = '';
+    // 分组 1：书签（inline 编辑）
+    if (bookmarks.length > 0) {
+      root.appendChild(renderModeManagerGroup('bookmark', '书签', bookmarks.map((b) => ({
+        key: 'bookmark:' + b.id,
+        icon: b.url ? '🔖' : '★',
+        name: b.name,
+        title: b.url,
+        mode: b.mode,
+        onChange: (newMode) => patchBookmark(b.id, newMode),
+      }))));
+    }
+    // 分组 2：RSS 源（inline 编辑）
+    if (feedsList.length > 0) {
+      root.appendChild(renderModeManagerGroup('feed', 'RSS 订阅源', feedsList.map((f) => ({
+        key: 'feed:' + f.id,
+        icon: '≡',
+        name: f.name,
+        title: f.url,
+        mode: f.mode,
+        onChange: (newMode) => patchFeed(f.id, newMode),
+      }))));
+    }
+    // 分组 3：auto 按钮（快捷方式；inline 编辑走 /api/buttons/update）
+    const shortcuts = buttons.filter((b) => b.auto && b.command && !b.toggle && !b.kind);
+    if (shortcuts.length > 0) {
+      root.appendChild(renderModeManagerGroup('shortcut', '快捷方式', shortcuts.map((b) => ({
+        key: 'btn:' + b.id,
+        icon: b.icon ? '' : '⚙',
+        name: b.name,
+        title: b.description || '',
+        mode: b.mode,
+        onChange: (newMode) => patchButton(b.id, newMode),
+      }))));
+    }
+    // 分组 4：手动配置按钮（不可编辑——按钮无 UI 模式编辑入口，提示用户改 buttons.json）
+    const manualButtons = buttons.filter((b) => !b.auto && b.command && !b.toggle && !b.kind);
+    if (manualButtons.length > 0) {
+      root.appendChild(renderModeManagerGroup('manual', '手动配置按钮（mode 字段需改 buttons.json）', manualButtons.map((b) => ({
+        key: 'btn:' + b.id,
+        icon: '⚙',
+        name: b.name,
+        title: b.description || '',
+        mode: b.mode,
+        onChange: null, // 标记为只读
+      }))));
+    }
+  }
+
+  // 单个分组：标题 + 行列表（v0.8：分组标题可点击折叠，状态持久化）
+  // groupId 用于 localStorage key 稳定标识——4 个分组固定：bookmark / feed / shortcut / manual
+  function renderModeManagerGroup(groupId, title, rows) {
+    const wrap = document.createElement('div');
+    wrap.className = 'mode-manager-group';
+    wrap.dataset.groupId = groupId;
+    // v0.8：折叠状态从 localStorage 恢复（默认展开；与现有 sp-section 行为一致）
+    const foldKey = 'workbench-fold-mmgr-' + groupId;
+    const collapsed = localStorage.getItem(foldKey) === '1';
+    if (collapsed) wrap.classList.add('collapsed');
+    // 标题行改为可点击 button（与 sp-title-row 视觉一致：箭头 + 文字）
+    const h = document.createElement('button');
+    h.type = 'button';
+    h.className = 'mode-manager-group-title';
+    h.setAttribute('aria-expanded', String(!collapsed));
+    const icon = document.createElement('span');
+    icon.className = 'sp-title-icon';
+    icon.innerHTML = '&#9656;';   // 三角形，CSS rotate(90deg) = 朝下 = 展开
+    const text = document.createElement('span');
+    text.textContent = title + ' (' + rows.length + ')';
+    h.appendChild(icon);
+    h.appendChild(text);
+    h.title = '点击收起 / 展开此分组';
+    h.addEventListener('click', () => {
+      const isCollapsed = wrap.classList.toggle('collapsed');
+      h.setAttribute('aria-expanded', String(!isCollapsed));
+      localStorage.setItem(foldKey, isCollapsed ? '1' : '0');
+    });
+    wrap.appendChild(h);
+    const list = document.createElement('div');
+    list.className = 'mode-manager-rows';
+    for (const r of rows) {
+      list.appendChild(renderModeManagerRow(r));
+    }
+    wrap.appendChild(list);
+    return wrap;
+  }
+
+  // 单行：图标 + 名称 + multi-tag 编辑器
+  function renderModeManagerRow(r) {
+    const row = document.createElement('div');
+    row.className = 'mode-manager-row';
+    row.dataset.mmKey = r.key;
+    const icon = document.createElement('span');
+    icon.className = 'mode-manager-icon';
+    if (r.icon && r.icon.startsWith('icons/')) {
+      // 真实图标（auto 按钮 → public/icons/<id>.ico）
+      const img = document.createElement('img');
+      img.src = r.icon;
+      img.alt = '';
+      icon.appendChild(img);
+    } else {
+      icon.textContent = r.icon || '⚙';
+    }
+    const name = document.createElement('span');
+    name.className = 'mode-manager-name';
+    name.textContent = r.name;
+    name.title = r.title || r.name;
+    const tags = document.createElement('div');
+    tags.className = 'mode-manager-tags';
+    if (r.onChange) {
+      tags.appendChild(renderModeTags(r.mode, r.onChange));
+    } else {
+      // 手动按钮：只读，并提示改 buttons.json
+      tags.classList.add('readonly');
+      tags.textContent = r.mode === '__hidden__'
+        ? '隐藏'
+        : (r.mode
+            ? (Array.isArray(r.mode) ? r.mode.map(modeLabel).join('+') : modeLabel(r.mode))
+            : '全部模式');
+    }
+    row.appendChild(icon);
+    row.appendChild(name);
+    row.appendChild(tags);
+    return row;
+  }
+
+  // 模式管理区行编辑：PATCH /api/bookmarks/<id>（仅 mode 字段）
+  async function patchBookmark(id, newMode) {
+    try {
+      const r = await fetch('/api/bookmarks/' + encodeURIComponent(id), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: newMode }),
+      });
+      const res = await r.json().catch(() => ({}));
+      if (res.ok) {
+        showToast('已更新书签模式', 'ok');
+        await refreshBookmarks();
+      } else {
+        showToast('更新失败: ' + (res.error || ''), 'err');
+      }
+    } catch (e) {
+      showToast('更新失败: ' + e.message, 'err');
+    }
+  }
+
+  // 模式管理区行编辑：PATCH /api/feeds/<id>（仅 mode 字段）
+  async function patchFeed(id, newMode) {
+    try {
+      const r = await fetch('/api/feeds/' + encodeURIComponent(id), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: newMode }),
+      });
+      const res = await r.json().catch(() => ({}));
+      if (res.ok) {
+        showToast('已更新订阅源模式', 'ok');
+        await refreshFeedsData(true);
+      } else {
+        showToast('更新失败: ' + (res.error || ''), 'err');
+      }
+    } catch (e) {
+      showToast('更新失败: ' + e.message, 'err');
+    }
+  }
+
+  // 模式管理区行编辑：POST /api/buttons/update（仅 mode 字段；走常规按钮更新端点）
+  async function patchButton(id, newMode) {
+    try {
+      const r = await fetch('/api/buttons/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, mode: newMode }),
+      });
+      const res = await r.json().catch(() => ({}));
+      if (res.ok) {
+        showToast('已更新快捷方式模式', 'ok');
+        await refreshButtons();
+      } else {
+        showToast('更新失败: ' + (res.error || ''), 'err');
+      }
+    } catch (e) {
+      showToast('更新失败: ' + e.message, 'err');
+    }
+  }
+
   // ---- 初始化 ----
   async function init() {
+    // 先加载模式定义（modes.json）：决定切换器 / 设置面板 / 只读态 / 模式白名单
+    // 失败时沿用 MODES 内置默认（白名单回退 ['work']，保证工作模式正常）
+    try {
+      const m = await fetchJSON('/api/modes');
+      if (m && Array.isArray(m.modes) && m.modes.length) {
+        MODES = m;
+        MODES_LOADED = true;
+      }
+    } catch (e) { /* ignore：沿用 MODES 默认 */ }
     applyStyle();
     initShortcutPanel();
     initRssPanel();
+    initModeManager(); // v5 feedback 3：模式管理区
+    // 动态渲染两处模式切换器（设置面板 + 顶栏），让 modes.json 加新模式零代码改动
+    renderModeSwitchers();
+    // 测试钩子：URL 含 ?mmx=1 时暴露 minimaxData setter，供 headless 浏览器模拟警示场景
+    // （生产环境无副作用；测试时用 ?mmx=1# 或 ?mmx=1 启动）
+    if (location.search.indexOf('mmx=1') >= 0) {
+      window.__setMmx = (d) => { minimaxData = d; renderSystemCard('sys-minimax'); };
+    }
     try {
       const cfg = await fetchJSON('/api/buttons');
       if (cfg && cfg.title) titleEl.textContent = cfg.title;
@@ -1990,7 +2958,9 @@
     await refreshBalance();
     await refreshDidaToday();
     await refreshDidaFocus();
+    await refreshMiniMax();
     await refreshRss();
+    await refreshDshSessions(); // DSH 对话状态（feedback 2）—— 启动即拉一次
     updateRateBadge();
     setInterval(refreshButtons, 3000);
     setInterval(refreshLogs, 2000);
@@ -1999,7 +2969,9 @@
     setInterval(refreshBalance, 60000);
     setInterval(refreshDidaToday, 300000);
     setInterval(refreshDidaFocus, 300000);
+    setInterval(refreshMiniMax, 300000); // MiniMax 套餐：5 分钟一次（服务端另有 60 秒缓存）
     setInterval(refreshRss, 600000); // RSS 源 10 分钟（服务端另有 15 分钟缓存兜底）
+    setInterval(refreshDshSessions, 5000); // DSH 对话状态：5 秒一次（状态变化即时可见）
     // 现在时刻线每分钟刷新：任务随当前时间在「已过/未到」间滑动，线的位置与文案要跟着走
     setInterval(() => { renderSystemCard('sys-dida-today'); applyMasonry(); }, 60000);
     setInterval(updateRateBadge, 60000);

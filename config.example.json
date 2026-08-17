@@ -3,5 +3,6 @@
   "credentialsPath": "C:\\Users\\you\\.dsh\\.credentials.yaml",
   "didaMcpConfig": "C:\\Users\\you\\.dsh\\profiles\\web\\cordis.patch.yml",
   "pushCwd": "D:\\path\\to\\anki-harness-workdir",
-  "didaDefaultCwd": "D:\\your\\workspace"
+  "didaDefaultCwd": "D:\\your\\workspace",
+  "minimaxWeeklyHourlyRatio": 10
 }

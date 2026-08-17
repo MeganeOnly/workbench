@@ -40,6 +40,28 @@
           <span class="sp-icon">&#9680;</span>样式
         </button>
         <div class="style-panel hidden" id="style-panel" role="dialog" aria-label="样式设置">
+          <div class="sp-section" data-collapsible="mode">
+            <button class="sp-title-row" type="button" aria-expanded="true">
+              <span class="sp-title-icon">&#9656;</span><span>模式</span>
+            </button>
+            <div class="sp-content">
+              <div class="sp-mode-desc">选择当前模式；仅显示当前模式下的按钮 / 书签 / RSS 订阅源。切换不影响其它偏好与卡片顺序（工作模式只读，娱乐模式可编辑）。</div>
+              <div class="mode-seg" id="mode-seg">
+                <!-- 由 app.js 根据 /api/modes（modes.json）动态渲染；modes.json 加新模式后这里自动出现 -->
+              </div>
+            </div>
+          </div>
+          <div class="sp-section" data-collapsible="mode-manager">
+            <button class="sp-title-row" type="button" aria-expanded="true">
+              <span class="sp-title-icon">&#9656;</span><span>模式管理</span>
+            </button>
+            <div class="sp-content">
+              <div class="sp-mode-desc">统一查看并编辑所有按钮 / 书签 / RSS 订阅源的模式标签（v5 feedback 3）。多选 tag：不勾任何 = 全部模式可见。</div>
+              <div class="mode-manager-list" id="mode-manager-list">
+                <!-- 由 app.js initModeManager() 渲染：3 个分组（功能按钮 / 书签 / RSS 源），每行 inline multi-tag -->
+              </div>
+            </div>
+          </div>
           <div class="sp-section" data-collapsible="appearance">
             <button class="sp-title-row" type="button" aria-expanded="true">
               <span class="sp-title-icon">&#9656;</span><span>外观</span>
@@ -54,33 +76,6 @@
                 </span>
                 <span class="name">翡翠极简</span>
                 <span class="desc">浅色 · Bento 卡片墙（默认）</span>
-              </button>
-              <button class="sp-opt" data-theme-opt="night">
-                <span class="swatch">
-                  <span class="swatch-dot" style="background:#0d1812"></span>
-                  <span class="swatch-dot" style="background:#14221a"></span>
-                  <span class="swatch-dot" style="background:#34d399"></span>
-                </span>
-                <span class="name">墨夜</span>
-                <span class="desc">深色墨绿 · 护眼沉浸</span>
-              </button>
-              <button class="sp-opt" data-theme-opt="glass">
-                <span class="swatch">
-                  <span class="swatch-dot" style="background:#0d1915"></span>
-                  <span class="swatch-dot" style="background:rgba(255,255,255,.25)"></span>
-                  <span class="swatch-dot" style="background:#34d399"></span>
-                </span>
-                <span class="name">琉璃</span>
-                <span class="desc">玻璃拟态 · 深色渐变毛玻璃</span>
-              </button>
-              <button class="sp-opt" data-theme-opt="terminal">
-                <span class="swatch">
-                  <span class="swatch-dot" style="background:#070d08"></span>
-                  <span class="swatch-dot" style="background:#0c150d"></span>
-                  <span class="swatch-dot" style="background:#00e676"></span>
-                </span>
-                <span class="name">终端</span>
-                <span class="desc">黑底荧光绿 · 全等宽 · 扫描线</span>
               </button>
               <button class="sp-opt" data-theme-opt="brutal">
                 <span class="swatch">
@@ -108,15 +103,6 @@
                 </span>
                 <span class="name">复古纸感</span>
                 <span class="desc">米黄纸 · 颗粒噪点 · 怀旧</span>
-              </button>
-              <button class="sp-opt" data-theme-opt="pixel">
-                <span class="swatch">
-                  <span class="swatch-dot" style="background:#cfd8b8"></span>
-                  <span class="swatch-dot" style="background:#0f380f"></span>
-                  <span class="swatch-dot" style="background:#9bbc0f"></span>
-                </span>
-                <span class="name">像素掌机</span>
-                <span class="desc">Game Boy 绿 · 像素块 · 等宽</span>
               </button>
               <button class="sp-opt" data-theme-opt="corporate">
                 <span class="swatch">
@@ -244,6 +230,10 @@
                   <button type="button" data-size="wide">宽卡</button>
                 </div>
               </div>
+              <div class="sc-field">
+                <label>显示模式（勾选要包含的模式；不勾 = 全部模式可见）</label>
+                <div id="sc-mode" class="mode-select"></div>
+              </div>
               <button type="button" class="sc-add-btn" id="sc-add-btn">添加按钮</button>
               <button type="button" class="sc-list-toggle" id="sc-list-toggle" aria-expanded="true" title="展开 / 收起">
                 <span class="sc-caret">&#9656;</span>已添加的快捷方式
@@ -263,6 +253,10 @@
               <div class="sc-field">
                 <label for="rss-url">订阅地址（RSS / Atom URL）</label>
                 <input id="rss-url" type="text" placeholder="http://export.arxiv.org/rss/cs.AI" autocomplete="off">
+              </div>
+              <div class="sc-field">
+                <label>显示模式（勾选要包含的模式；不勾 = 全部模式可见）</label>
+                <div id="rss-mode" class="mode-select"></div>
               </div>
               <button type="button" class="sc-add-btn" id="rss-add-btn">添加订阅源</button>
               <button type="button" class="sc-list-toggle" id="rss-list-toggle" aria-expanded="true" title="展开 / 收起">
@@ -294,14 +288,16 @@
   </main>
 </div>
 
-<!-- 添加书签弹窗 -->
-<div class="modal-overlay hidden" id="bookmark-modal">
+<!-- 添加/编辑书签弹窗（同一 modal，openModal 接受可选 editId；编辑态时标题/按钮文案变化） -->
+<div class="modal-overlay hidden" id="bookmark-modal" data-edit-id="">
   <div class="modal">
-    <h3>添加书签</h3>
+    <h3 id="bm-modal-title">添加书签</h3>
     <label for="bm-name">名称</label>
     <input type="text" id="bm-name" placeholder="例如: DeepSeek 文档">
     <label for="bm-url">网址</label>
     <input type="text" id="bm-url" placeholder="https://example.com">
+    <label>显示模式（勾选要包含的模式；不勾 = 全部模式可见）</label>
+    <div id="bm-mode" class="mode-select"></div>
     <div class="modal-actions">
       <button class="modal-cancel" id="bm-cancel">取消</button>
       <button class="modal-save" id="bm-save">保存</button>

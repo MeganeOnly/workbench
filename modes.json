@@ -1,0 +1,19 @@
+{
+    "default": "work",
+    "modes": [
+        {
+            "id": "work",
+            "name": "工作",
+            "icon": "▣",
+            "readonly": true,
+            "description": "专注工作模式，只读（除模式切换外禁止改动卡片/书签/RSS）"
+        },
+        {
+            "id": "entertainment",
+            "name": "娱乐",
+            "icon": "▶",
+            "readonly": false,
+            "description": "娱乐/放松模式，可自由编辑"
+        }
+    ]
+}

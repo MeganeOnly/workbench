@@ -80,6 +80,143 @@ function getDeepSeekKey() {
   }
 }
 
+// ---- MiniMax Token Plan 额度查询（60 秒缓存） ----
+// endpoint：/v1/token_plan/remains（中国版 api.minimaxi.com / 全球版 api.minimax.io）
+// 鉴权：Authorization: Bearer <Subscription Key>。响应里 model_remains 是按 model 拆分的数组，
+// 每条同时含 5h 窗口（current_interval_*）和周窗口（current_weekly_*）两组；percent 字段可信，
+// 当 total>0 时 count 字段可用，否则退回 percent。Cookie 路径 /coding_plan/remains 已停用。
+// 这里读 MINIMAX_CN_API_KEY（credentials.yaml 中用户已填），如需全球版加 MINIMAX_GLOBAL_API_KEY。
+// weeklyHourlyRatio = 周限额相当于多少个 5h 限额（用户描述为 10：1，可在 config.json 覆盖）
+const MINIMAX_WEEKLY_HOURLY_RATIO = Number(cfg('minimaxWeeklyHourlyRatio', 10)) || 10;
+let minimaxCache = { data: null, at: 0 };
+const MINIMAX_CACHE_MS = 60 * 1000;
+
+function getMiniMaxKey() {
+  try {
+    const raw = fs.readFileSync(CREDENTIALS_PATH, 'utf8');
+    // 优先匹配中国版专用 key，其次通用 key（兼容用户使用同一 key 或配置其他变体）
+    const m = raw.match(/MINIMAX_CN_API_KEY:\s*["']?(sk-[^\s"']+)/)
+           || raw.match(/MINIMAX_API_KEY:\s*["']?(sk-[^\s"']+)/)
+           || raw.match(/MINIMAX_GLOBAL_API_KEY:\s*["']?(sk-[^\s"']+)/);
+    return m ? m[1] : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function epochSeconds(v) {
+  // 自动判别秒/毫秒（阈值 1e9/1e12）
+  if (v === null || v === undefined) return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  return n > 1e12 ? Math.floor(n / 1000) : n;
+}
+
+function parseMiniMaxModelRemains(entry) {
+  // entry 来自 model_remains 数组单条；同时含 5h + 周两组字段
+  const result = { '5h': null, week: null };
+  const endSec5h = epochSeconds(entry.end_time);
+  const endSecWeek = epochSeconds(entry.weekly_end_time);
+  const minutes5h = entry.start_time && endSec5h ? Math.round((endSec5h - epochSeconds(entry.start_time)) / 60) : null;
+  const minutesWeek = entry.weekly_start_time && endSecWeek ? Math.round((endSecWeek - epochSeconds(entry.weekly_start_time)) / 60) : null;
+
+  function buildWindow(minutes, endSec, total, usage, percent) {
+    // 优先用 percent（中国版是「剩余百分比」，与国际版语义一致——已用 = 100 - percent）；
+    // count 字段仅在 total>0 时才有可信语义（usage_count 在某些站点是已用、某些是剩余，跨站点不一致）。
+    let remainingPct = null, usedPct = null, totalVal = null;
+    if (Number.isFinite(Number(percent))) {
+      const p = Math.max(0, Math.min(100, Number(percent)));
+      remainingPct = Math.round(p * 10) / 10;
+      usedPct = Math.round((100 - p) * 10) / 10;
+    }
+    if (Number(total) > 0 && Number.isFinite(Number(usage))) {
+      totalVal = Number(total);
+    }
+    return {
+      total: totalVal,
+      remainingPct,
+      usedPct,
+      windowMinutes: minutes,
+      resetAt: endSec || null,
+    };
+  }
+
+  result['5h'] = buildWindow(
+    minutes5h, endSec5h,
+    entry.current_interval_total_count, entry.current_interval_usage_count,
+    entry.current_interval_remaining_percent
+  );
+  result.week = buildWindow(
+    minutesWeek, endSecWeek,
+    entry.current_weekly_total_count, entry.current_weekly_usage_count,
+    entry.current_weekly_remaining_percent
+  );
+  if (result['5h'] && result['5h'].remainingPct === null) result['5h'] = null;
+  if (result.week && result.week.remainingPct === null) result.week = null;
+  return result;
+}
+
+function queryMiniMaxCodingPlan() {
+  return new Promise((resolve) => {
+    const now = Date.now();
+    if (minimaxCache.data && now - minimaxCache.at < MINIMAX_CACHE_MS) {
+      resolve(minimaxCache.data);
+      return;
+    }
+    const key = getMiniMaxKey();
+    if (!key) {
+      resolve({ ok: false, error: '未找到 MINIMAX_CN_API_KEY' });
+      return;
+    }
+    const req = httpsRequest('api.minimaxi.com', '/v1/token_plan/remains', {
+      headers: {
+        Authorization: 'Bearer ' + key,
+        accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      timeoutMs: 15000,
+    });
+    req.then((parsed) => {
+      // 响应形如 { model_remains: [...], base_resp: {...} } —— 没有嵌套 data；
+      // 兼容旧形态（整对象再包一层 data）
+      const container = (parsed && parsed.data && (parsed.data.model_remains || parsed.data.base_resp)) ? parsed.data : parsed;
+      const topResp = container.base_resp || (parsed && parsed.base_resp);
+      if (topResp && Number(topResp.status_code) !== 0) {
+        const msg = topResp.status_msg || ('status_code ' + topResp.status_code);
+        const data = { ok: false, error: 'API: ' + msg };
+        minimaxCache = { data, at: now };
+        resolve(data);
+        return;
+      }
+      const modelRemains = Array.isArray(container.model_remains) ? container.model_remains : [];
+      // 取首个 model_remains（多数 plan 只有一条；多条时取第一个含 5h+周双窗口的）
+      const windows = { '5h': null, week: null };
+      for (const entry of modelRemains) {
+        const r = parseMiniMaxModelRemains(entry);
+        if (!windows['5h'] && r['5h']) windows['5h'] = r['5h'];
+        if (!windows.week && r.week) windows.week = r.week;
+        if (windows['5h'] && windows.week) break;
+      }
+      const planName = container.current_subscribe_title || container.plan_name
+        || container.combo_title || container.current_plan_title
+        || (container.current_combo_card && container.current_combo_card.title) || null;
+      const result = {
+        ok: true,
+        planName: planName ? String(planName).trim() : null,
+        modelName: (modelRemains[0] && (modelRemains[0].modelName || modelRemains[0].model_name)) || null,
+        windows,
+        modelCount: modelRemains.length,
+        weeklyHourlyRatio: MINIMAX_WEEKLY_HOURLY_RATIO,
+        updatedAt: now,
+      };
+      minimaxCache = { data: result, at: now };
+      resolve(result);
+    }).catch((err) => {
+      resolve({ ok: false, error: err.message });
+    });
+  });
+}
+
 function queryDeepSeekBalance() {
   return new Promise((resolve) => {
     const now = Date.now();
@@ -120,7 +257,13 @@ try {
   if (fs.existsSync(BOOKMARKS_PATH)) {
     const raw = fs.readFileSync(BOOKMARKS_PATH, 'utf8').replace(/^\uFEFF/, '');
     const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) bookmarks = parsed;
+    if (Array.isArray(parsed)) {
+      // 旧数据无 mode 字段 → 补 null（全部模式可见，与先前行为一致；向后兼容）
+      bookmarks = parsed.map((b) => ({
+        ...b,
+        mode: (b && 'mode' in b) ? normalizeModeField(b.mode) : null,
+      }));
+    }
   }
 } catch (e) {
   console.error('读取 bookmarks.json 失败:', e.message);
@@ -135,6 +278,66 @@ function saveBookmarks() {
 }
 
 // ---- RSS 订阅源（信息卡：用户自配 RSS/Atom 源，持久化到 feeds.json）----
+const MODES_PATH = path.join(ROOT, 'modes.json');
+
+// ---- 模式定义（modes.json：可扩展模式列表 + 每模式 readonly 等元数据） ----
+// 启动时读取；文件缺失或解析失败 → 回退内置默认（work / entertainment）；
+// 这样 modes.json 误删 / 损坏 / 首次部署都不会让服务起不来，符合 fresh clone 鲁棒性原则。
+// 加新模式 = 改 modes.json 一行，零代码改动（前端动态渲染切换器 + 后端白名单校验）。
+const DEFAULT_MODES = {
+  default: 'work',
+  modes: [
+    { id: 'work', name: '工作', icon: '▣', readonly: true, description: '工作模式' },
+    { id: 'entertainment', name: '娱乐', icon: '▶', readonly: false, description: '娱乐模式' },
+  ],
+};
+let MODES = DEFAULT_MODES;
+try {
+  if (fs.existsSync(MODES_PATH)) {
+    const raw = fs.readFileSync(MODES_PATH, 'utf8').replace(/^\uFEFF/, '');
+    const parsed = JSON.parse(raw);
+    if (parsed && Array.isArray(parsed.modes) && parsed.modes.length) {
+      // 校验每条模式：必须有 id 字符串（其他字段缺省回退），非法项丢弃
+      const valid = parsed.modes.filter((m) => m && typeof m.id === 'string' && m.id);
+      if (valid.length) {
+        MODES = {
+          default: (typeof parsed.default === 'string' && valid.some((m) => m.id === parsed.default)) ? parsed.default : valid[0].id,
+          modes: valid.map((m) => ({
+            id: m.id,
+            name: typeof m.name === 'string' ? m.name : m.id,
+            icon: typeof m.icon === 'string' ? m.icon : '',
+            readonly: m.readonly === true,
+            description: typeof m.description === 'string' ? m.description : '',
+          })),
+        };
+      }
+    }
+  }
+} catch (e) {
+  console.error('读取 modes.json 失败，使用内置默认:', e.message);
+}
+
+// 模式白名单：服务端校验 mode 字段（书签 / RSS 标 mode 时只接受存在的模式 id）
+// v0.8：'__hidden__' 是 UI 上"隐藏"按钮对应的 sentinel 值（所有模式都不可见），
+// 单独识别——不属于 MODES.modes 列表，但合法需要透传。
+const MODE_HIDDEN_SENTINEL = '__hidden__';
+function isValidModeId(id) {
+  if (id == null) return true; // null/undefined = 全部模式可见，始终合法
+  if (typeof id !== 'string') return false;
+  if (id === MODE_HIDDEN_SENTINEL) return true; // v0.8：hidden sentinel 单独识别
+  return MODES.modes.some((m) => m.id === id);
+}
+// 规范化 mode 字段：null 维持、字符串保留、数组项逐一校验后过滤
+function normalizeModeField(m) {
+  if (m == null) return null;
+  if (typeof m === 'string') return isValidModeId(m) ? m : null;
+  if (Array.isArray(m)) {
+    const arr = m.filter((x) => typeof x === 'string' && isValidModeId(x));
+    return arr.length ? arr : null;
+  }
+  return null;
+}
+
 const FEEDS_PATH = path.join(ROOT, 'feeds.json');
 const RSS_CACHE_MS = 15 * 60 * 1000; // 单源缓存 15 分钟（源不会变得更快，避免频繁抓取）
 const RSS_MAX_ITEMS = 8;             // 每源最多条数（卡片展示用，多了没意义）
@@ -145,7 +348,13 @@ try {
   if (fs.existsSync(FEEDS_PATH)) {
     const raw = fs.readFileSync(FEEDS_PATH, 'utf8').replace(/^\uFEFF/, '');
     const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) rssFeeds = parsed;
+    if (Array.isArray(parsed)) {
+      // 旧订阅源无 mode 字段 → 补 null（全部模式可见）
+      rssFeeds = parsed.map((f) => ({
+        ...f,
+        mode: (f && 'mode' in f) ? normalizeModeField(f.mode) : null,
+      }));
+    }
   }
 } catch (e) {
   console.error('读取 feeds.json 失败:', e.message);
@@ -611,6 +820,80 @@ function callDshApi(method, payload, timeoutMs = 30000) {
   });
 }
 
+// ---- DSH 会话状态聚合（前端 /api/dsh-sessions）v0.6.2 ----
+// 调用 DSH 3080 `session.list` 拿所有 sessions，聚合运行/待确认状态。
+// 状态语义：
+//   - 3080 不可达 → status='offline'
+//   - 调用成功但列表为空 → status='idle' / running=0 / total=0
+//   - 任意 session.running=true → status='working' / running=N / total=M
+//   - 全部 running=false → status='idle' / running=0 / total=M
+//   - 调用失败 / 解析失败 → status='error'
+// 前端轮询 5 秒（与 push 卡片同款节奏），状态变化时卡片亮：
+//   working=琥珀脉冲（转圈） / idle=无显示 / offline=无显示 / error=无显示
+//   pending = running=false & plan.pending=true & !blank（极少见）
+//   error / ask_user_question 等状态不在 session.list API → 技术限制无法暴露
+// 历史：v0.6 三态（working/unread/pending）→ v0.6.2 移除 unread（用户反馈"不实用"）
+
+function classifySessions(list) {
+  const running = list.filter((s) => s && s.running === true);
+  const nonRunning = list.filter((s) => s && s.running !== true);
+  const total = list.length;
+
+  // 待确认：plan 模式写完计划等待用户接受（极少见；plan.pending=true 且非 running）
+  const pending = nonRunning.filter((s) => {
+    if (s.blank === true) return false;
+    const proj = (s.projections && s.projections.values) || {};
+    return proj.plan && proj.plan.pending === true;
+  });
+
+  return { running, pending, total };
+}
+
+async function fetchDshSessions() {
+  try {
+    const resp = await callDshApi('session.list', {}, 5000);
+    // DSH 协议：callDshApi 解析的是 result.value；DSH 3080 实际返回 { items: [...] }
+    const list = (resp && resp.items) ? resp.items : (Array.isArray(resp) ? resp : []);
+    const cls = classifySessions(list);
+    const running = cls.running.length;
+    // 取出当前正在工作的 session 摘要（id + title + cwd）→ 前端 hover 看详情
+    const active = cls.running.slice(0, 5).map((s) => ({
+      sessionId: s.sessionId,
+      title: (s.projections && s.projections.values && s.projections.values.title) || null,
+      cwd: s.cwd || null,
+      updatedAt: s.updatedAt || null,
+    }));
+    // 待确认会话标题（最多 5 个）
+    const pendingSample = cls.pending.slice(0, 5).map((s) => ({
+      sessionId: s.sessionId,
+      title: (s.projections && s.projections.values && s.projections.values.title) || null,
+      cwd: s.cwd || null,
+    }));
+    return {
+      ok: true,
+      status: running > 0 ? 'working' : 'idle',
+      running,
+      total: cls.total,
+      pendingCount: cls.pending.length,
+      active,
+      pending: pendingSample,
+    };
+  } catch (e) {
+    // 3080 不可达 / API 错误 → 区分 offline vs error
+    const offline = String(e.message || '').includes('ECONNREFUSED') || String(e.message || '').includes('ECONNRESET');
+    return {
+      ok: false,
+      status: offline ? 'offline' : 'error',
+      error: e.message,
+      running: 0,
+      total: 0,
+      pendingCount: 0,
+      active: [],
+      pending: [],
+    };
+  }
+}
+
 // ---- dida365 MCP 客户端（今日任务信息卡）----
 // 凭据从 DSH profile 的 cordis.patch.yml 读取（Bearer token），避免硬编码。
 const DIDA_MCP_URL = 'https://mcp.dida365.com';
@@ -1032,6 +1315,11 @@ const server = http.createServer(async (req, res) => {
     return json(res, { buttons: list, version: appVersion() });
   }
 
+  // 模式定义（modes.json 透传，前端用白名单校验 + 渲染切换器）
+  if (p === '/api/modes' && req.method === 'GET') {
+    return json(res, MODES);
+  }
+
   // toggle 按钮：按当前端口状态自动决定执行 start 或 stop
   if (p.startsWith('/api/toggle/') && req.method === 'POST') {
     const id = decodeURIComponent(p.slice('/api/toggle/'.length));
@@ -1055,6 +1343,18 @@ const server = http.createServer(async (req, res) => {
   if (p === '/api/balance' && req.method === 'GET') {
     const bal = await queryDeepSeekBalance();
     return json(res, bal);
+  }
+
+  // DSH 会话状态聚合（feedback 2：DSH 对话状态变化指示）
+  if (p === '/api/dsh-sessions' && req.method === 'GET') {
+    const data = await fetchDshSessions();
+    return json(res, data);
+  }
+
+  // MiniMax 编程套餐额度（5h 窗口 + 周窗口）
+  if (p === '/api/minimax-coding-plan' && req.method === 'GET') {
+    const data = await queryMiniMaxCodingPlan();
+    return json(res, data);
   }
 
   // 滴答今日任务（今日任务信息卡）
@@ -1092,9 +1392,17 @@ const server = http.createServer(async (req, res) => {
     let body = '';
     for await (const chunk of req) body += chunk;
     try {
-      const { name, url } = JSON.parse(body);
+      const { name, url, mode } = JSON.parse(body);
       if (!name || !url) return json(res, { ok: false, error: '名字和网址都不能为空' }, 400);
-      const item = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name, url, createdAt: Date.now() };
+      // mode 字段：null / 字符串 / 数组；非法值回退到 null（全部模式可见）
+      const normMode = normalizeModeField(mode);
+      const item = {
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        name,
+        url,
+        mode: normMode,
+        createdAt: Date.now(),
+      };
       bookmarks.push(item);
       saveBookmarks();
       return json(res, { ok: true, bookmark: item });
@@ -1131,27 +1439,66 @@ const server = http.createServer(async (req, res) => {
     return json(res, { ok: true });
   }
 
-  // RSS 订阅源列表（设置面板管理用）
-  if (p === '/api/feeds' && req.method === 'GET') {
-    return json(res, { feeds: rssFeeds.map((f) => ({ id: f.id, name: f.name, url: f.url })) });
+  // PATCH /api/bookmarks/<id>：编辑现有书签（name / url / mode 字段可选）
+  // 字段规范化：mode 走 normalizeModeField（与服务端 normalizeRule 一致），非法 id 静默回退 null
+  if (p.startsWith('/api/bookmarks/') && req.method === 'PATCH') {
+    const id = decodeURIComponent(p.slice('/api/bookmarks/'.length));
+    const idx = bookmarks.findIndex((b) => b.id === id);
+    if (idx < 0) return json(res, { ok: false, error: '书签不存在' }, 404);
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    try {
+      const patch = JSON.parse(body) || {};
+      const cur = bookmarks[idx];
+      // name 缺省保留；非空字符串才覆盖
+      if (Object.prototype.hasOwnProperty.call(patch, 'name')) {
+        if (typeof patch.name !== 'string' || !patch.name.trim()) {
+          return json(res, { ok: false, error: '名称不能为空' }, 400);
+        }
+        cur.name = patch.name.trim();
+      }
+      // url 缺省保留；非空字符串才覆盖
+      if (Object.prototype.hasOwnProperty.call(patch, 'url')) {
+        if (typeof patch.url !== 'string' || !patch.url.trim()) {
+          return json(res, { ok: false, error: '网址不能为空' }, 400);
+        }
+        cur.url = patch.url.trim();
+      }
+      // mode 字段：显式 patch 才覆盖（保留 null=全部模式可见 / 字符串=单模式 / 数组=多模式）
+      if (Object.prototype.hasOwnProperty.call(patch, 'mode')) {
+        cur.mode = normalizeModeField(patch.mode);
+      }
+      bookmarks[idx] = cur;
+      saveBookmarks();
+      return json(res, { ok: true, bookmark: cur });
+    } catch (e) {
+      return json(res, { ok: false, error: '请求格式错误: ' + e.message }, 400);
+    }
   }
 
-  // 新增 RSS 订阅源 {name, url}
+  // RSS 订阅源列表（设置面板管理用）
+  if (p === '/api/feeds' && req.method === 'GET') {
+    return json(res, { feeds: rssFeeds.map((f) => ({ id: f.id, name: f.name, url: f.url, mode: f.mode != null ? f.mode : null })) });
+  }
+
+  // 新增 RSS 订阅源 {name, url, mode?}
   if (p === '/api/feeds' && req.method === 'POST') {
     let body = '';
     for await (const chunk of req) body += chunk;
     try {
-      const { name, url } = JSON.parse(body);
+      const { name, url, mode } = JSON.parse(body);
       const clean = (url || '').trim();
       const cleanName = (name || '').trim();
       if (!cleanName || !clean) return json(res, { ok: false, error: '名称和地址都不能为空' }, 400);
       if (!/^https?:\/\/\S+$/i.test(clean)) return json(res, { ok: false, error: '地址必须以 http:// 或 https:// 开头' }, 400);
       if (rssFeeds.some((f) => f.url === clean)) return json(res, { ok: false, error: '该地址已添加过' }, 400);
       if (rssFeeds.length >= RSS_MAX_FEEDS) return json(res, { ok: false, error: '最多 ' + RSS_MAX_FEEDS + ' 个订阅源' }, 400);
+      const normMode = normalizeModeField(mode);
       const item = {
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
         name: cleanName.slice(0, 30),
         url: clean.slice(0, 500),
+        mode: normMode,
         createdAt: Date.now(),
       };
       rssFeeds.push(item);
@@ -1171,6 +1518,44 @@ const server = http.createServer(async (req, res) => {
     rssFeedCache.delete(id);
     saveFeeds();
     return json(res, { ok: true });
+  }
+
+  // PATCH /api/feeds/<id>：编辑现有 RSS 订阅源（v5 feedback 3：模式管理区的 RSS 行 inline 编辑 mode）
+  // 字段语义与 PATCH /api/bookmarks/<id> 同款：name / url / mode 字段可选保留
+  // mode 字段走 normalizeModeField 校验（null / 字符串 / 数组）
+  if (p.startsWith('/api/feeds/') && req.method === 'PATCH') {
+    const id = decodeURIComponent(p.slice('/api/feeds/'.length));
+    const idx = rssFeeds.findIndex((f) => f.id === id);
+    if (idx < 0) return json(res, { ok: false, error: '订阅源不存在' }, 404);
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    try {
+      const patch = JSON.parse(body) || {};
+      const cur = rssFeeds[idx];
+      if (Object.prototype.hasOwnProperty.call(patch, 'name')) {
+        if (typeof patch.name !== 'string' || !patch.name.trim()) {
+          return json(res, { ok: false, error: '名称不能为空' }, 400);
+        }
+        cur.name = patch.name.trim().slice(0, 30);
+      }
+      if (Object.prototype.hasOwnProperty.call(patch, 'url')) {
+        if (typeof patch.url !== 'string' || !patch.url.trim()) {
+          return json(res, { ok: false, error: '地址不能为空' }, 400);
+        }
+        if (!/^https?:\/\/\S+$/i.test(patch.url.trim())) {
+          return json(res, { ok: false, error: '地址必须以 http:// 或 https:// 开头' }, 400);
+        }
+        cur.url = patch.url.trim().slice(0, 500);
+      }
+      if (Object.prototype.hasOwnProperty.call(patch, 'mode')) {
+        cur.mode = normalizeModeField(patch.mode);
+      }
+      rssFeeds[idx] = cur;
+      saveFeeds();
+      return json(res, { ok: true, feed: cur });
+    } catch (e) {
+      return json(res, { ok: false, error: '请求格式错误: ' + e.message }, 400);
+    }
   }
 
   // RSS 信息卡数据（全部源合并，含每源错误/过期标记）
@@ -1293,7 +1678,7 @@ const server = http.createServer(async (req, res) => {
     let body = '';
     for await (const chunk of req) body += chunk;
     try {
-      const { id, color, size } = JSON.parse(body);
+      const { id, color, size, mode } = JSON.parse(body);
       if (!id) return json(res, { ok: false, error: '缺少按钮 id' }, 400);
       const list = loadButtons();
       const btn = list.find(b => b.id === id);
@@ -1302,6 +1687,8 @@ const server = http.createServer(async (req, res) => {
       if (size !== undefined && size !== 'small' && size !== 'wide') return json(res, { ok: false, error: '尺寸只能是 small 或 wide' }, 400);
       if (color) btn.color = color;
       if (size) btn.size = size;
+      // mode 字段：null = 全部模式可见；字符串 = 单模式；数组 = 多模式（normalizeModeField 兜底非法值）
+      if (mode !== undefined) btn.mode = normalizeModeField(mode);
       saveButtonsFile(list);
       return json(res, { ok: true });
     } catch (e) {

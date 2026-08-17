@@ -24,3 +24,9 @@ public/icons/
 
 # 第三方设计参考素材（来源见各目录 SOURCE.txt，不随仓库分发）
 design-references/
+
+# 设计草稿（评审中或已落地的方案文档，未稳定）
+.plans/
+
+# Office / LibreOffice 临时锁文件（编辑 buttons.json 等时产生）
+.~lock.*#
