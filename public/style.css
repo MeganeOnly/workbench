@@ -838,6 +838,29 @@ body[data-layout="split-center"] .buttons-grid .card:not(.stat-card) {
   border-radius: 999px;
   transition: width .4s ease, background-color .2s ease;
 }
+/* 周限额「按节奏应剩」标记线（2026-08-18 新增）：
+   用 API 返回的 windowMinutes（动态周期）算应剩%，条子内画琥珀右括号 `)`。
+   fill 长度 < marker 位置 → 实际剩余比应剩多 → 用得太少（浪费周限额）。
+   v0.9.1 marker 从竖虚线改为 SVG 水平波浪 ~ → v0.9.2 垂直 S 形 ∿
+   → v0.9.3 左括号圆弧 `(` → v0.9.4 右括号圆弧 `)`（用户原话"我想要的是）的括号内容"——
+   右括号凸向右，"指向未来剩余空间"，与"应剩多少"语义更贴）。 */
+.mmx-bar-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 10px;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  cursor: help;
+  z-index: 2;
+  color: var(--warn);
+}
+.mmx-bar-marker svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
 .mmx-pct {
   font-family: var(--font-mono);
   font-size: 13px;

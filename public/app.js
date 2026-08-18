@@ -412,7 +412,7 @@
           '</div>' +
           '<div class="mmx-row" data-window="week">' +
             '<div class="mmx-label">周限额</div>' +
-            '<div class="mmx-bar"><div class="mmx-bar-fill"></div></div>' +
+            '<div class="mmx-bar"><div class="mmx-bar-fill"></div><div class="mmx-bar-marker"><svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M 5 0 Q 10 5, 5 10" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></div></div>' +
             '<div class="mmx-pct">—</div>' +
             '<div class="mmx-sub">—</div>' +
           '</div>' +
@@ -429,6 +429,7 @@
         week: {
           row: el.querySelector('.mmx-row[data-window="week"]'),
           fill: el.querySelector('.mmx-row[data-window="week"] .mmx-bar-fill'),
+          marker: el.querySelector('.mmx-row[data-window="week"] .mmx-bar-marker'),
           pct: el.querySelector('.mmx-row[data-window="week"] .mmx-pct'),
           sub: el.querySelector('.mmx-row[data-window="week"] .mmx-sub'),
         },
@@ -762,11 +763,29 @@
 
     let dailyPace = null;
     let daysToReset = null;
+    let expectedRemainingPct = null;
     if (pctW != null && wweek && wweek.resetAt) {
       const ms = wweek.resetAt * 1000 - now;
       daysToReset = Math.max(0.1, ms / 86400000);
       const weeklyRemainingInHours = (pctW / 100) * ratio;
       dailyPace = weeklyRemainingInHours / daysToReset;
+      // 「按节奏应剩」标记线（2026-08-18 新增）：用 API 返回的 windowMinutes（动态周期）作分母，
+      // 应剩余 = 剩余时间 / 总周期。fill 长度 < marker 位置 = 实际剩余比应剩多 = 用得太少。
+      if (wweek.windowMinutes && wweek.windowMinutes > 0) {
+        expectedRemainingPct = Math.max(0, Math.min(100, (ms / (wweek.windowMinutes * 60 * 1000)) * 100));
+      }
+    }
+    // 写 marker 位置（null → 隐藏，e.g. windowMinutes 缺失 / resetAt 已过）
+    const marker = refs.rows.week.marker;
+    if (marker) {
+      if (expectedRemainingPct != null) {
+        marker.style.left = expectedRemainingPct.toFixed(2) + '%';
+        marker.style.display = '';
+        marker.title = '按节奏应剩 ' + expectedRemainingPct.toFixed(1) + '%（窗口总 ' + (wweek && wweek.windowMinutes ? Math.round(wweek.windowMinutes / 60) + 'h' : '?') + '）';
+      } else {
+        marker.style.display = 'none';
+        marker.title = '';
+      }
     }
 
     // meta 行整行隐藏（2026-08-16）：DOM 保留便于未来恢复
@@ -1609,21 +1628,42 @@
   }
 
   // ---- 刷新滴答今日任务 ----
+  // 历史：曾因 fetch 永不返回（浏览器扩展 / Service Worker / 网络层死锁）导致
+  // didaToday 永远为 null、卡片无限显示"读取中..."。修复：10 秒 AbortController 超时兜底，
+  // 失败时打 console.warn + 具体错误信息（不再干瘪显示"无法获取"）。
   async function refreshDidaToday() {
+    console.log('[dida-today] fetch /api/dida-today');
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 10000);
     try {
-      didaToday = await fetchJSON('/api/dida-today');
+      didaToday = await fetchJSON('/api/dida-today', { signal: controller.signal });
+      console.log('[dida-today] ok, count=' + (didaToday && didaToday.count));
     } catch (e) {
-      didaToday = { ok: false, error: '无法获取' };
+      console.warn('[dida-today] failed: ' + e.message);
+      // AbortError 表明是超时触发的；其余异常透传具体信息便于排查
+      const reason = (e && e.name === 'AbortError') ? '请求超时（10s）' : (e.message || '网络异常');
+      didaToday = { ok: false, error: '获取失败: ' + reason, count: 0, tasks: [] };
+    } finally {
+      clearTimeout(tid);
     }
     renderGrid();
   }
 
   // ---- 刷新滴答今日专注时长 ----
+  // 同款超时兜底（与 didaToday 共用滴答 MCP，任意一项挂死另一项大概率也挂）
   async function refreshDidaFocus() {
+    console.log('[dida-focus] fetch /api/dida-focus');
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 10000);
     try {
-      didaFocus = await fetchJSON('/api/dida-focus');
+      didaFocus = await fetchJSON('/api/dida-focus', { signal: controller.signal });
+      console.log('[dida-focus] ok, totalMs=' + (didaFocus && didaFocus.totalMs));
     } catch (e) {
-      didaFocus = { ok: false, error: '无法获取' };
+      console.warn('[dida-focus] failed: ' + e.message);
+      const reason = (e && e.name === 'AbortError') ? '请求超时（10s）' : (e.message || '网络异常');
+      didaFocus = { ok: false, error: '获取失败: ' + reason };
+    } finally {
+      clearTimeout(tid);
     }
     renderGrid();
   }

@@ -270,6 +270,179 @@ async function main() {
       why: 'boxShadow: ' + dangerDom.row5hShadow,
     });
 
+    // 4.1.5) 按节奏应剩 marker（2026-08-18 新增）
+    // 场景 A：刚好节奏（剩余 = 应剩 = 50%）
+    const resetAtMid = Math.floor((Date.now() + 5040 * 60 * 1000) / 1000);
+    const mockOnPace = {
+      ok: true, planName: null, modelName: 'general',
+      windows: {
+        '5h': { remainingPct: 80, usedPct: 20, resetAt: futureReset5h, windowMinutes: 300 },
+        week: { remainingPct: 50, usedPct: 50, resetAt: resetAtMid, windowMinutes: 10080 },
+      },
+      weeklyHourlyRatio: 10, modelCount: 1,
+    };
+    await send('Runtime.evaluate', { expression: 'window.__setMmx(' + JSON.stringify(mockOnPace) + ')', returnByValue: true });
+    await sleep(300);
+    const onPaceRes = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const card = document.querySelector('[data-id="sys-minimax"]');
+        const m = card.querySelector('.mmx-row[data-window="week"] .mmx-bar-marker');
+        return {
+          display: getComputedStyle(m).display,
+          left: m.style.left,
+          title: m.title,
+        };
+      })()`,
+      returnByValue: true,
+    });
+    const onPaceDom = onPaceRes.result && onPaceRes.result.result.value;
+    console.log('[INFO] 节奏相符 marker：');
+    console.log('  display = ' + onPaceDom.display + '  left = ' + onPaceDom.left);
+    console.log('  title   = "' + onPaceDom.title + '"');
+    checks.push({
+      name: 'marker：A 节奏相符（剩 50% / 应剩 50%）',
+      ok: onPaceDom.display !== 'none' && Math.abs(parseFloat(onPaceDom.left) - 50) < 0.01,
+      why: 'display=' + onPaceDom.display + '  left=' + onPaceDom.left,
+    });
+    checks.push({
+      name: 'marker：title 含「按节奏应剩 50.0%」',
+      ok: onPaceDom.title.includes('按节奏应剩 50.0%'),
+      why: 'title="' + onPaceDom.title + '"',
+    });
+    // 场景 A.5：marker 是 SVG 波浪 ~（v0.9.1 新增）—— 不是竖虚线而是 path 曲线
+    await send('Runtime.evaluate', { expression: 'window.__setMmx(' + JSON.stringify(mockOnPace) + ')', returnByValue: true });
+    await sleep(300);
+    const waveRes = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const card = document.querySelector('[data-id="sys-minimax"]');
+        const m = card.querySelector('.mmx-row[data-window="week"] .mmx-bar-marker');
+        const svg = m && m.querySelector('svg');
+        const path = svg && svg.querySelector('path');
+        return {
+          hasSvg: !!svg,
+          svgViewBox: svg && svg.getAttribute('viewBox'),
+          hasPath: !!path,
+          pathD: path && path.getAttribute('d'),
+          pathStroke: path && getComputedStyle(path).stroke,
+          markerColor: getComputedStyle(m).color,
+        };
+      })()`,
+      returnByValue: true,
+    });
+    const waveDom = waveRes.result && waveRes.result.result.value;
+    console.log('[INFO] 波浪形状 marker：');
+    console.log('  hasSvg=' + waveDom.hasSvg + '  viewBox=' + waveDom.svgViewBox);
+    console.log('  pathD=' + waveDom.pathD);
+    console.log('  markerColor=' + waveDom.markerColor);
+    checks.push({
+      name: 'marker：A.5 是 SVG 右括号圆弧路径（viewBox 10x10 + path 含 Q）',
+      ok: waveDom.hasSvg && waveDom.hasPath && waveDom.svgViewBox === '0 0 10 10'
+        && /Q/.test(waveDom.pathD || ''),
+      why: 'hasSvg=' + waveDom.hasSvg + '  viewBox=' + waveDom.svgViewBox + '  pathD=' + waveDom.pathD,
+    });
+    checks.push({
+      name: 'marker：A.5 颜色为 var(--warn) → 当前 computed color 非空且不等于默认黑',
+      ok: waveDom.markerColor && waveDom.markerColor !== 'rgb(0, 0, 0)',
+      why: 'markerColor=' + waveDom.markerColor,
+    });
+
+    // 场景 B：用得太少（实际剩余 80% > 应剩 50%）
+    const mockUnderUse = { ...mockOnPace };
+    mockUnderUse.windows = { ...mockOnPace.windows, week: { remainingPct: 80, usedPct: 20, resetAt: resetAtMid, windowMinutes: 10080 } };
+    await send('Runtime.evaluate', { expression: 'window.__setMmx(' + JSON.stringify(mockUnderUse) + ')', returnByValue: true });
+    await sleep(300);
+    const underRes = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const card = document.querySelector('[data-id="sys-minimax"]');
+        const m = card.querySelector('.mmx-row[data-window="week"] .mmx-bar-marker');
+        const fill = card.querySelector('.mmx-row[data-window="week"] .mmx-bar-fill');
+        return {
+          markerLeft: m.style.left,
+          fillWidth: fill.style.width,
+        };
+      })()`,
+      returnByValue: true,
+    });
+    const underDom = underRes.result && underRes.result.result.value;
+    console.log('[INFO] 用得太少 marker：');
+    console.log('  markerLeft = ' + underDom.markerLeft + '  fillWidth = ' + underDom.fillWidth);
+    checks.push({
+      name: 'marker：B 用得太少（fill 80% > marker 50% → marker 仍在 50% 处）',
+      ok: Math.abs(parseFloat(underDom.markerLeft) - 50) < 0.01 && parseFloat(underDom.fillWidth) === 80,
+      why: 'markerLeft=' + underDom.markerLeft + '  fillWidth=' + underDom.fillWidth,
+    });
+
+    // 场景 C：用得太多（实际剩余 20% < 应剩 50%）
+    const mockOverUse = { ...mockOnPace };
+    mockOverUse.windows = { ...mockOnPace.windows, week: { remainingPct: 20, usedPct: 80, resetAt: resetAtMid, windowMinutes: 10080 } };
+    await send('Runtime.evaluate', { expression: 'window.__setMmx(' + JSON.stringify(mockOverUse) + ')', returnByValue: true });
+    await sleep(300);
+    const overRes = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const card = document.querySelector('[data-id="sys-minimax"]');
+        const m = card.querySelector('.mmx-row[data-window="week"] .mmx-bar-marker');
+        const fill = card.querySelector('.mmx-row[data-window="week"] .mmx-bar-fill');
+        return {
+          markerLeft: m.style.left,
+          fillWidth: fill.style.width,
+        };
+      })()`,
+      returnByValue: true,
+    });
+    const overDom = overRes.result && overRes.result.result.value;
+    console.log('[INFO] 用得太多 marker：');
+    console.log('  markerLeft = ' + overDom.markerLeft + '  fillWidth = ' + overDom.fillWidth);
+    checks.push({
+      name: 'marker：C 用得太多（fill 20% < marker 50% → marker 仍在 50% 处）',
+      ok: Math.abs(parseFloat(overDom.markerLeft) - 50) < 0.01 && parseFloat(overDom.fillWidth) === 20,
+      why: 'markerLeft=' + overDom.markerLeft + '  fillWidth=' + overDom.fillWidth,
+    });
+
+    // 场景 D：windowMinutes 缺失 → marker 隐藏
+    const mockNoWindow = { ...mockOnPace };
+    mockNoWindow.windows = { ...mockOnPace.windows, week: { remainingPct: 50, usedPct: 50, resetAt: resetAtMid, windowMinutes: 0 } };
+    await send('Runtime.evaluate', { expression: 'window.__setMmx(' + JSON.stringify(mockNoWindow) + ')', returnByValue: true });
+    await sleep(300);
+    const noWinRes = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const card = document.querySelector('[data-id="sys-minimax"]');
+        const m = card.querySelector('.mmx-row[data-window="week"] .mmx-bar-marker');
+        return { display: getComputedStyle(m).display };
+      })()`,
+      returnByValue: true,
+    });
+    const noWinDom = noWinRes.result && noWinRes.result.result.value;
+    console.log('[INFO] windowMinutes 缺失 marker：');
+    console.log('  display = ' + noWinDom.display);
+    checks.push({
+      name: 'marker：D windowMinutes=0 → marker 隐藏',
+      ok: noWinDom.display === 'none',
+      why: 'display=' + noWinDom.display,
+    });
+
+    // 场景 E：周期刚开始（应剩 ≈ 100%）
+    const resetAtFull = Math.floor((Date.now() + 10080 * 60 * 1000) / 1000);
+    const mockFull = { ...mockOnPace };
+    mockFull.windows = { ...mockOnPace.windows, week: { remainingPct: 100, usedPct: 0, resetAt: resetAtFull, windowMinutes: 10080 } };
+    await send('Runtime.evaluate', { expression: 'window.__setMmx(' + JSON.stringify(mockFull) + ')', returnByValue: true });
+    await sleep(300);
+    const fullRes = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const card = document.querySelector('[data-id="sys-minimax"]');
+        const m = card.querySelector('.mmx-row[data-window="week"] .mmx-bar-marker');
+        return { left: m.style.left };
+      })()`,
+      returnByValue: true,
+    });
+    const fullDom = fullRes.result && fullRes.result.result.value;
+    console.log('[INFO] 周期刚开始 marker：');
+    console.log('  left = ' + fullDom.left);
+    checks.push({
+      name: 'marker：E 刚重置完（应剩 100%）→ marker.left=100%',
+      ok: Math.abs(parseFloat(fullDom.left) - 100) < 0.01,
+      why: 'left=' + fullDom.left,
+    });
+
     // 4.2) 正常态断言（meta 行、alert 行、class、box-shadow）
     checks.push({
       name: '正常态 meta 行 display:none',
