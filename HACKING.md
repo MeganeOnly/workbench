@@ -1,24 +1,11 @@
 # HACKING.md · 开发者 onboarding（5 分钟入口）
 
-> **本文件是工作台项目的**快速上手入口**。**
-> 改代码前 5 分钟读这份 → 直接动手；遇到细节 → 跳 [`DEV.md`](./DEV.md) 对应章节。
-> 完整 API、变更历史、机制详解都在 DEV.md（71KB）；本文件是入口与索引，不是替代。
+> **本文件是工作台项目的快速上手入口。** 改代码前 5 分钟读这份 → 直接动手；遇到细节 → 跳 [`DEV.md`](./DEV.md) 对应章节。
+> 完整 API、机制详解、所有版本变更历史都在 DEV.md（53KB，本机专属）；本文件是入口与索引，不是替代。
 >
-> **上次更新**：2026-08-18（`dida-push-today` prompt 瘦身 D049 / 三层分层；前版 v0.9.4 marker）
-> - v0.8：multi-tag 全部→隐藏 + checkbox 视觉隐藏 + 模式管理区分组折叠
-> - v0.5：22px 等宽大字 + 琥珀脉冲动画 → 「多个 8px 小圆点 + 极小 meta」（圆点对齐 DSH 会话栏）
-> - v0.5.1：working meta 仅留「N 个工作」；非 working 移除静态文字
-> - v0.5.2：非 working 状态（idle/offline/error/loading）连圆点也不显示——卡片塌缩到只剩标题
-> - v0.6：拆 v0.5.2 的二态判断为三态可见（working / unread / pending）
-> - v0.6.2：移除 unread 状态——只剩 working（旋转琥珀，每会话一个）+ pending（琥珀静态，plan 待确认）；truly idle / blank / offline / error 仍隐藏
-> - **v0.7**：①4 处 select option 内的 `🔒 ` 前缀已清理；②所有 `<select>` 改为 multi-checkbox 标签（虚拟"全部"项 + 每个模式一个 checkbox）；③新增设置面板「模式管理」区（`sp-section[data-collapsible="mode-manager"]`）——统一列出 4 类内容
-> - **v0.8（用户反馈 4 项）**：①multi-tag 组件 v0.7 虚拟"全部"按钮移除 → 新增"隐藏"按钮（与具体模式互斥；mode 字段新增第四态 sentinel `'__hidden__'`——服务端 `normalizeModeField` 白名单识别；前端 `modeMatches` 永远 false）；②checkbox 视觉完全隐藏（`position:absolute; opacity:0; pointer-events:none`），点击 `<label>` 触发，`.mode-tag.active` 增加发光 box-shadow + 按下 scale(0.96) 强化"点了亮起"反馈；③模式管理区 4 个分组（书签 / RSS 源 / 快捷方式 / 手动配置）按分类收起展开——分组标题改为可点击 `<button>`，toggle `.collapsed` + `localStorage.workbench-fold-mmgr-{groupId}` 持久化；④用户设计偏好沉淀到 §3.5 与 DECISIONS.md D039
-> - **v0.9**：MiniMax 周限额条内增加「按节奏应剩」标记线（用户原话"周限额条里面 你再画一条线 我的需求是 能够看到照理来说 周限额区间内 我现在应该用了多少"）。算法用 API 返回的 `windowMinutes`（动态周期）作分母算应剩%；视觉是琥珀竖虚线（与"周限额在浪费"警示同色）；fill 长度 < marker = 用得太少会浪费，fill > marker = 用得太多。详见 DEV §8 v0.9 条目
-> - **v0.9.1**：marker 视觉从竖虚线升级为 SVG 波浪 ~（用户原话"我想要的是曲线行么"）。SVG path `M 0 5 Q 6 1, 12 5 T 24 5`（quadratic bezier → smooth quadratic，24×10 viewBox，`stroke="currentColor"` 让 CSS `color: var(--warn)` 主题自适应）；marker 容器宽 6px → 24px；位置/title/edge case 逻辑不变。详见 DEV §8 v0.9.1 条目
-> - **v0.9.2**：marker 视觉从水平 ~ 改为垂直 S 形 ∿（用户原话"我还以为波浪号是垂直的呢..居然不是..."——vertical sine 形态与"参考线 / 节奏"语义更贴）。SVG viewBox 24×10 → 10×10，path `M 5 0 Q 0 3, 5 5 T 5 10`（vertical quadratic → smooth quadratic 形成一个垂直 S 周期）；marker 容器宽 24px → 10px；位置/title/edge case 逻辑不变。详见 DEV §8 v0.9.2 条目
-> - **v0.9.3**：marker 视觉从垂直 S 形 ∿ 简化为左括号圆弧 `(`（用户原话"这么一看感觉还是那种类似于括号的形式好看点"——单弧形态比 S 形更克制、更"参考线"语义，凸向左与"指回已消耗进度"语义一致）。SVG path `M 5 0 Q 0 5, 5 10`（quadratic bezier，控制点 (0,5) = 左中点，最远凸到 x≈2.5 形成左半圆弧）；viewBox 10×10 / marker 容器宽 10px 沿用 v0.9.2。详见 DEV §8 v0.9.3 条目
-> - **v0.9.4**：marker 视觉从左括号 `(` 改为右括号 `)`（用户原话"我想要的是）的括号内容"——右括号凸向右，"指向未来剩余空间"，与"应剩多少"语义更贴）。SVG path `M 5 0 Q 10 5, 5 10`（quadratic bezier，控制点 (10,5) = 右中点，最远凸到 x≈7.5 形成右半圆弧）；viewBox / marker 容器宽 / 配色沿用 v0.9.3。详见 DEV §8 v0.9.4 条目
-> - **新概念**：mode 字段 4 态——`null` / `string` / `string[]` / `'__hidden__'`（v0.8 新增）；`__hidden__` 是 UI 上"隐藏"按钮对应的 sentinel，与具体模式互斥（content 在任何模式下都不显示）
+> **上次更新**：2026-08-18（D049 / 前版 v0.9.4 marker；完整变更历史见 `DEV.md §8`）
+
+> **新概念**：mode 字段 4 态——`null` / `string` / `string[]` / `'__hidden__'`（v0.8 新增）；`__hidden__` 是 UI 上"隐藏"按钮对应的 sentinel，与具体模式互斥（content 在任何模式下都不显示）。
 
 ---
 
@@ -73,7 +60,7 @@
 7. **按钮点击必须有可见反馈**（全局 toast 已实现）。任何新增类型保持 toast（成功/失败/锁定/警告四态）。
 8. **打开外部链接用 `openExternal(url)`**（app.js）：被弹窗拦截回退 `location.href`。**禁止直接 `window.open`**——曾因弹窗拦截"点了没反应"。
 9. **前端版本自检已内置**：`/api/buttons` 返回静态文件 MD5，页面发现版本变化自动 reload。**改前端文件后旧标签页 ≤4 秒自愈**，开发中频繁改文件会触发刷新属预期。
-10. **改动必测试**：`node test-click.mjs`（无副作用）→ DEV §7 清单 → 浏览器 Ctrl+F5 实测。
+10. **改动必测试**：`node tests/test-click.mjs`（无副作用）→ DEV §7 清单 → 浏览器 Ctrl+F5 实测。
 
 ---
 
@@ -107,12 +94,12 @@
 | 编辑书签的 mode（创建后） | 侧栏 ✎ / 卡片墙 ✎ → modal 改 name/url/mode | v0.7 改为 multi-tag（v0.5 之前是 select 单选）；PATCH `/api/bookmarks/<id>` |
 | 编辑快捷方式（卡片）的 mode（创建后） | 设置面板「快捷方式」列表项的 multi-tag | v0.7 改为 multi-tag；POST `/api/buttons/update` 接受 mode 字段 |
 | 一处编辑所有内容 mode | 设置面板「模式管理」区（v0.7 新增） | 4 类内容分组：书签 / RSS 源 / 快捷方式 / 手动配置按钮；每行 inline multi-tag 实时 PATCH；手动配置按钮只读（需改 buttons.json） |
-| 调整 multi-tag 组件（按钮 / 视觉 / 状态机） | `public/app.js` 的 `renderModeTags`（line ~1078）+ `public/style.css` `.mode-tag*` + 服务端 `normalizeModeField` | v0.8 设计原则见 §3.5；mode 字段 4 态（null/string/array/`__hidden__`）；改完跑 `test-mode-tags.mjs` + `test-mode.mjs` + `test-click.mjs` |
+| 调整 multi-tag 组件（按钮 / 视觉 / 状态机） | `public/app.js` 的 `renderModeTags`（line ~1078）+ `public/style.css` `.mode-tag*` + 服务端 `normalizeModeField` | v0.8 设计原则见 §3.5；mode 字段 4 态（null/string/array/`__hidden__`）；改完跑 `tests/test-mode-tags.mjs` + `tests/test-mode.mjs` + `tests/test-click.mjs` |
 | 系统卡（如滴答今日/专注）卡在"读取中..." | 浏览器侧 fetch 永不返回（扩展 / SW / 网络层死锁）→ `didaToday` 永远 null | v0.8.1 修复：`refreshDidaToday` / `refreshDidaFocus` 加 10s `AbortController` 超时 + console 日志；Ctrl+F5 后看 DevTools Console 是否出现 `[dida-today] failed: AbortError` 定位原因。详见 [DEV §8 2026-08-18](#) |
 | 让内容"隐藏"（不在任何模式显示） | multi-tag 勾"隐藏"按钮 → mode = `'__hidden__'` | v0.8 新增 sentinel；服务端 `normalizeModeField` 白名单识别；前端 `modeMatches` 永远 false |
 | 模式管理区按分类收起 | 设置面板「模式管理」4 个分组的标题行（v0.8 可点击 button） | localStorage `workbench-fold-mmgr-{groupId}` 持久化；4 个 groupId 固定：`bookmark` / `feed` / `shortcut` / `manual` |
-| 晚间统一推送 GitHub | `node F:/AllWorkSpace/tools/daily-push.cjs --repo <这里>`（或 `--all` 一次推多仓） | 自动 fetch + 分歧检测 + 敏感内容审计 + 列文件 + 默认确认；详见 `git-push-detour` skill §六 / `F:\AllWorkSpace\AGENTS.md` §推送工作流 |
-| 调整 MiniMax 周限额 marker 样式 / 算法 / edge case | `public/app.js` 的 `renderMiniMaxCard`（marker 计算块，line ~770）+ `public/style.css` 的 `.mmx-bar-marker` 段 + `test-minimax.mjs`（5 个 marker 断言 A/B/C/D/E + 2 个形状 A.5） | Ctrl+F5 | v0.9 算法（marker 周期用 `wweek.windowMinutes` 动态）+ v0.9.4 视觉（SVG 右括号 `)`，10×10 viewBox，path `M 5 0 Q 10 5, 5 10`）；位置/title/edge case 逻辑不变 |
+| 晚间统一推送 GitHub | 本机开发者约定，按各自 skill / 脚本走 | 自动 fetch + 分歧检测 + 敏感内容审计 + 列文件 + 默认确认 |
+| 调整 MiniMax 周限额 marker 样式 / 算法 / edge case | `public/app.js` 的 `renderMiniMaxCard`（marker 计算块，line ~770）+ `public/style.css` 的 `.mmx-bar-marker` 段 + `tests/test-minimax.mjs`（5 个 marker 断言 A/B/C/D/E + 2 个形状 A.5） | Ctrl+F5 | v0.9 算法（marker 周期用 `wweek.windowMinutes` 动态）+ v0.9.4 视觉（SVG 右括号 `)`，10×10 viewBox，path `M 5 0 Q 10 5, 5 10`）；位置/title/edge case 逻辑不变 |
 
 ---
 
@@ -125,11 +112,11 @@
 │   └─ 无 POST 记录 → 浏览器端
 │       ├─ 页面是否已 Ctrl+F5 刷新？（旧标签页 ≤4s 自愈，等一下再试）
 │       ├─ 浏览器缓存旧 JS？（强制刷新一次）
-│       └─ 前端接线断？跑 node test-click.mjs → 失败行 = 问题点
+│       └─ 前端接线断？跑 node tests/test-click.mjs → 失败行 = 问题点
 └─ 看 workbench.log 有 [client] 行？→ window.onerror / unhandledrejection / runButton 失败
 ```
 
-详细：[DEV §4.5](./DEV.md) 前端卡片系统 + `F:\.dsh\skills\workbench-dev\SKILL.md` 排障段。
+详细：[DEV §4.5](./DEV.md) 前端卡片系统 + `workbench-dev` skill 排障段（在你 DSH skills 目录里）。
 
 ---
 

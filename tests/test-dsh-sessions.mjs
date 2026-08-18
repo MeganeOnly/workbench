@@ -1,4 +1,5 @@
 // DSH 对话状态卡（v0.6.2 二态可见：working / pending；移除 unread）端到端测试：
+// 用法：node tests/test-dsh-sessions.mjs
 // - /api/dsh-sessions 端点存在 + 返回 status / running / total / active / pendingCount
 // - 卡片渲染 working / pending / idle / offline 四种状态
 // - 5 秒轮询

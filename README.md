@@ -177,16 +177,30 @@
 
 ```
 workbench/
-├── server.js            # 本地服务（端口 3180），零依赖 Node 实现
-├── buttons.example.json # 按钮配置模板（复制为 buttons.json 后按需修改）
-├── config.example.json  # 个人环境配置模板（复制为 config.json，可选）
-├── public/              # 前端页面
+├── server.js              # 本地服务（端口 3180），零依赖 Node 实现
+├── buttons.example.json   # 按钮配置模板（复制为 buttons.json 后按需修改）
+├── config.example.json    # 个人环境配置模板（复制为 config.json，可选）
+├── modes.json             # 模式定义（v0.8 配置化，可扩展）
+├── public/                # 前端页面
 │   ├── index.html
 │   ├── style.css
 │   └── app.js
-├── launch-app.ps1       # 通用智能启动器：.exe/.lnk 通吃，未运行启动/已运行激活前台
-├── start-workbench.bat  # 一键启动脚本
-└── test-click.mjs       # 点击接线回归测试（node test-click.mjs，无副作用）
+├── launch-anki.bat        # Anki 专用智能启动器（已运行则激活前台）
+├── launch-app.ps1         # 通用智能启动器：.exe/.lnk 通吃，未运行启动/已运行激活前台
+├── start-workbench.bat    # 一键启动脚本
+├── extract-app-icon.ps1   # 快捷方式添加时自动提取图标
+├── HACKING.md             # 开发者 onboarding（5 分钟入口）
+├── README.md              # 本文件
+├── LICENSE                # MIT
+└── tests/                 # 回归测试套件
+    ├── test-click.mjs            # 点击接线回归测试（无头浏览器）
+    ├── test-mode.mjs             # mode 字段 API 测试
+    ├── test-mode-tags.mjs        # multi-tag 组件测试
+    ├── test-mode-frontend.mjs    # 模式维度前端无头 Edge 测试
+    ├── test-mode-e2e.mjs         # 模式维度端到端
+    ├── test-minimax.mjs          # MiniMax 周限额 marker 测试
+    ├── test-dsh-sessions.mjs     # DSH 会话状态卡测试
+    └── test-dida-today.mjs       # 滴答今日任务卡 fetch 超时兜底测试
 ```
 
 `buttons.json` / `config.json` / `feeds.json`（RSS 源）/ `bookmarks.json` 等运行时数据均在首次使用时自动生成，且已被 .gitignore 排除。
@@ -198,7 +212,7 @@ workbench/
 - **bat 文件必须纯 ASCII**（注释写英文）：cmd.exe 按系统 OEM 代码页解析批处理，UTF-8 中文注释会吞掉换行符导致命令错乱甚至挂起。
 - **执行命令用「字符串拼接 + `spawn(shell: true)`」**，不能用参数数组形式：数组形式会对含引号参数二次转义，cmd 无法解析（表现为按钮无反应、退出码 1）。
 - **按钮点击必须有可见反馈**（全局 toast 已实现）；新增按钮类型必须保持。
-- **前端点击接线单一真源 `rec.current`**：点击监听器与渲染赋值必须共用同一对象属性，曾因读写两个不同属性导致点击静默失效（零请求零报错）。改卡片逻辑后必须跑 `node test-click.mjs`（无头浏览器回归测试）。
+- **前端点击接线单一真源 `rec.current`**：点击监听器与渲染赋值必须共用同一对象属性，曾因读写两个不同属性导致点击静默失效（零请求零报错）。改卡片逻辑后必须跑 `node tests/test-click.mjs`（无头浏览器回归测试）。
 - **静态文件响应带 `Cache-Control: no-cache`**；`/api/buttons` 返回前端文件 MD5 版本号，页面轮询发现版本变化自动 reload——根治"改了代码但用户停在旧标签页"。
 - **打开外部链接用 `openExternal(url)`**（新标签页优先、被拦截回退当前页跳转），禁止直接 `window.open`。
 - **改 `buttons.json` / `public/` 静态文件刷新页面即生效**（配置 1 秒 TTL 自动重载）；只有改 `server.js` 才需重启服务。

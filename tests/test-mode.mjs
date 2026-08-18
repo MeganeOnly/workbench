@@ -1,4 +1,5 @@
 // 模式细化无头 Edge CDP 测试：
+// 用法：node tests/test-mode.mjs
 // - 验证 /api/modes 端点可访问
 // - 验证顶栏 mode-switcher 渲染正确
 // - 验证 readonly 模式下 .drag-hint 不渲染

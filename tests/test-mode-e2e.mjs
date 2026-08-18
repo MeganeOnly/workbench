@@ -1,4 +1,5 @@
 // 模式细化端到端测试：工作模式 vs 娱乐模式下三类内容（卡片/书签/RSS）显隐
+// 用法：node tests/test-mode-e2e.mjs
 // - 微博书签 mode:entertainment → 工作模式侧栏不见，娱乐模式可见
 // - arXiv RSS 源 mode:work → 工作模式 RSS 卡片显示，娱乐模式不显示
 // - 工作模式：拖拽手柄不可见 + 快捷方式区锁定 + 书签删除按钮不可见

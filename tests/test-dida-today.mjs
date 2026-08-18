@@ -1,5 +1,5 @@
 // 一次性诊断脚本：检查 sys-dida-today 卡片渲染状态
-// 用法：node test-dida-today.mjs
+// 用法：node tests/test-dida-today.mjs
 import { spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';

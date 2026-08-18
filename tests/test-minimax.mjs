@@ -1,4 +1,5 @@
 // MiniMax 卡视觉验证脚本（2026-08-16 新增）
+// 用法：node tests/test-minimax.mjs
 // 用无头 Edge + CDP 加载页面，断言：
 //   - .mmx-meta 行隐藏（display:none）
 //   - .mmx-alert 行未显示（display:none 或未设）

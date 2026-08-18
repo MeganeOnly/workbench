@@ -1,5 +1,5 @@
 // 回归测试：验证每个功能卡按钮的点击都能触发正确的 POST 请求（前端接线完整性）
-// 用法：node test-click.mjs   （需工作台服务已在 127.0.0.1:3180 运行）
+// 用法：node tests/test-click.mjs
 // 原理：用无头 Edge + CDP 加载页面，在页面内把 window.fetch 的 POST 换成"记录 URL +
 // 返回假成功响应"，GET 放行真实请求。因此点击按钮不会对 DSH/Anki 产生任何真实副作用，
 // 只验证"点击 -> runButton -> fetch(POST /api/...) "这条链路是否通。

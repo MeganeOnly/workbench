@@ -53,3 +53,16 @@ design-references/
 # 本机数据 dump
 *.dump
 
+# 杂项文档与编辑器临时
+*NOTES.md
+*NOTES*.md
+*-notes.md
+*-notes*.md
+LEGACY-LOCATION*.md
+*legacy-location*.md
+
+# 编辑器 / 备份 / 临时文件
+*.tmp
+*.bak
+*.swp
+

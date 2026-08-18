@@ -1,4 +1,5 @@
 // 模式细化前端无头 Edge CDP 测试（v2）：
+// 用法：node tests/test-mode-frontend.mjs
 // - 模式区在样式菜单顶部（sp-section[data-collapsible="mode"] 是第一个）
 // - 顶栏 mode-switcher 已移除（用户反馈"在外解锁太容易"）
 // - 工作模式：外观/布局/偏好/快捷方式/RSS 区域全部 pointer-events:none

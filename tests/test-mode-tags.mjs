@@ -1,4 +1,5 @@
 // v5 multi-tag + 模式管理区前端测试（v0.8 适配：全部→隐藏 sentinel __hidden__）
+// 用法：node tests/test-mode-tags.mjs
 // - 模式切换器装载 multi-tag（不在 select）
 // - 模式管理区列出 4 类（书签 / RSS / 快捷方式 / 手动配置按钮）
 // - multi-tag 多选 + "隐藏"按钮（与具体模式互斥；sentinel = '__hidden__'）
