@@ -30,3 +30,26 @@ design-references/
 
 # Office / LibreOffice 临时锁文件（编辑 buttons.json 等时产生）
 .~lock.*#
+
+# 凭证与隐私文件（防御性忽略）
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*credentials*
+*cred*
+*secrets*
+*token*
+*api*key*
+
+# 编辑器与系统临时
+.idea/
+.vscode/settings.json
+*~
+
+# 本机数据 dump
+*.dump
+
