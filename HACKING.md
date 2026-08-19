@@ -3,7 +3,7 @@
 > **本文件是工作台项目的快速上手入口。** 改代码前 5 分钟读这份 → 直接动手；遇到细节 → 跳 [`DEV.md`](./DEV.md) 对应章节。
 > 完整 API、机制详解、所有版本变更历史都在 DEV.md（53KB，本机专属）；本文件是入口与索引，不是替代。
 >
-> **上次更新**：2026-08-18（v1 系统卡 mode 选择 + D049；完整变更历史见 `DEV.md §8`）
+> **上次更新**：2026-08-19（v1.1 bookmarks TDZ 修复 + 加载失败保护；完整变更历史见 `DEV.md §8`）
 
 > **新概念**：mode 字段 4 态——`null` / `string` / `string[]` / `'__hidden__'`（v0.8 新增）；`__hidden__` 是 UI 上"隐藏"按钮对应的 sentinel，与具体模式互斥（content 在任何模式下都不显示）。
 >
@@ -63,6 +63,7 @@
 8. **打开外部链接用 `openExternal(url)`**（app.js）：被弹窗拦截回退 `location.href`。**禁止直接 `window.open`**——曾因弹窗拦截"点了没反应"。
 9. **前端版本自检已内置**：`/api/buttons` 返回静态文件 MD5，页面发现版本变化自动 reload。**改前端文件后旧标签页 ≤4 秒自愈**，开发中频繁改文件会触发刷新属预期。
 10. **改动必测试**：`node tests/test-click.mjs`（无副作用）→ DEV §7 清单 → 浏览器 Ctrl+F5 实测。
+11. **数据加载失败必须显式告警 + 拒绝覆盖**（v1.1 教训）：`bookmarks.json` 等用户数据加载 try/catch 失败时，**绝不能**让内存空数组经 saveBookmarks 覆盖原文件。规范：①加载失败 → 复制原文件为 `.bak`（保留数据）+ 设置 `xxxLoadFailed = true`；②saveXxx 检查标志，true 时**拒绝写入并 console.error FATAL**；③API 响应里暴露 `loadFailed` 字段供前端显示横幅。**严禁**"加载失败就静默用默认值"——会引发"内存空 → 后续操作覆盖原文件"的连锁数据丢失事故（2026-08-19 真实案例）。改任何用户数据加载段前先 grep `LoadFailed` / `backupCorruptedData` 确认模式一致。
 
 ---
 

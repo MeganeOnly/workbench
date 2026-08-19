@@ -1768,12 +1768,29 @@
     try {
       const data = await fetchJSON('/api/bookmarks');
       bookmarks = data.bookmarks || [];
+      // 服务端启动加载失败告警（v1 防护：原 bookmarks.json 已备份为 .bak，禁止后续写入）
+      showBookmarkLoadFailedBanner(data.loadFailed);
     } catch (e) {
       bookmarks = [];
+      showBookmarkLoadFailedBanner(false);
     }
     renderSidebarBookmarks();
     renderGrid();
     renderModeManager(); // v5 feedback 3：模式管理区跟随数据刷新
+  }
+
+  // 启动加载失败横幅（v1 防护：TDZ / 结构损坏时触发；指导用户从 .bak 恢复并重启）
+  function showBookmarkLoadFailedBanner(loadFailed) {
+    const id = 'bm-load-failed-banner';
+    const existing = document.getElementById(id);
+    if (existing) existing.remove();
+    if (!loadFailed) return;
+    const div = document.createElement('div');
+    div.id = id;
+    div.className = 'bm-load-failed-banner';
+    div.innerHTML = '<strong>书签加载失败</strong> · 服务端启动时无法读取 bookmarks.json（详见 workbench-err.log）。' +
+      '原文件已备份为 <code>bookmarks.json.bak</code>，当前内存为空且已禁用写入。请从 .bak 恢复后重启服务。';
+    document.body.prepend(div);
   }
 
   // 侧栏书签渲染（独立出来供搜索过滤 + 模式过滤复用）

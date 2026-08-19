@@ -61,6 +61,86 @@ const PUSH_STATE_PATH = path.join(ROOT, 'push-state.json');
 const BOOKMARKS_PATH = path.join(ROOT, 'bookmarks.json');
 const CREDENTIALS_PATH = cfg('credentialsPath', ''); // DeepSeek API Key 所在 yaml；未配置则余额卡提示"未找到"
 
+// ---- 模式定义（modes.json：可扩展模式列表 + 每模式 readonly 等元数据） ----
+// 启动时读取；文件缺失或解析失败 → 回退内置默认（work / entertainment）；
+// 这样 modes.json 误删 / 损坏 / 首次部署都不会让服务起不来，符合 fresh clone 鲁棒性原则。
+// 加新模式 = 改 modes.json 一行，零代码改动（前端动态渲染切换器 + 后端白名单校验）。
+// v1 教训：本段必须先于任何调用 normalizeModeField 的加载段（bookmarks/feeds/syscards）。
+// 原代码位置（line 345+）导致 bookmarks 加载段在 MODES 之前调用 normalizeModeField → TDZ。
+const MODES_PATH = path.join(ROOT, 'modes.json');
+const DEFAULT_MODES = {
+  default: 'work',
+  modes: [
+    { id: 'work', name: '工作', icon: '▣', readonly: true, description: '工作模式' },
+    { id: 'entertainment', name: '娱乐', icon: '▶', readonly: false, description: '娱乐模式' },
+  ],
+};
+let MODES = DEFAULT_MODES;
+try {
+  if (fs.existsSync(MODES_PATH)) {
+    const raw = fs.readFileSync(MODES_PATH, 'utf8').replace(/^\uFEFF/, '');
+    const parsed = JSON.parse(raw);
+    if (parsed && Array.isArray(parsed.modes) && parsed.modes.length) {
+      // 校验每条模式：必须有 id 字符串（其他字段缺省回退），非法项丢弃
+      const valid = parsed.modes.filter((m) => m && typeof m.id === 'string' && m.id);
+      if (valid.length) {
+        MODES = {
+          default: (typeof parsed.default === 'string' && valid.some((m) => m.id === parsed.default)) ? parsed.default : valid[0].id,
+          modes: valid.map((m) => ({
+            id: m.id,
+            name: typeof m.name === 'string' ? m.name : m.id,
+            icon: typeof m.icon === 'string' ? m.icon : '',
+            readonly: m.readonly === true,
+            description: typeof m.description === 'string' ? m.description : '',
+          })),
+        };
+      }
+    }
+  }
+} catch (e) {
+  console.error('读取 modes.json 失败，使用内置默认:', e.message);
+}
+
+// ---- 模式处理基础设施（必须在书签/订阅/系统卡加载段之前就绪；v1 教训）----
+// v0.8→v1 升级曾因 TDZ 静默 fallback 导致书签数据被覆盖：bookmarks.json 加载段（line 254）
+// 调用 normalizeModeField → 内部访问 MODE_HIDDEN_SENTINEL → const 声明前 TDZ 抛错
+// → try/catch 吞掉 → 内存空数组 → 后续 saveBookmarks 写入覆盖原文件。
+// 修复：把 MODES / MODE_HIDDEN_SENTINEL / isValidModeId / normalizeModeField 上移到所有数据加载段之前。
+// v0.8 引入 'hidden' 哨兵值（__hidden__）：UI 上"隐藏"按钮对应的 sentinel，所有模式都不可见，
+// 不属于 MODES.modes 列表但合法需透传——单独识别。
+const MODE_HIDDEN_SENTINEL = '__hidden__';
+function isValidModeId(id) {
+  if (id == null) return true; // null/undefined = 全部模式可见，始终合法
+  if (typeof id !== 'string') return false;
+  if (id === MODE_HIDDEN_SENTINEL) return true; // hidden sentinel 单独识别
+  return MODES.modes.some((m) => m.id === id);
+}
+// 规范化 mode 字段：null 维持、字符串保留、数组项逐一校验后过滤
+function normalizeModeField(m) {
+  if (m == null) return null;
+  if (typeof m === 'string') return isValidModeId(m) ? m : null;
+  if (Array.isArray(m)) {
+    const arr = m.filter((x) => typeof x === 'string' && isValidModeId(x));
+    return arr.length ? arr : null;
+  }
+  return null;
+}
+
+// ---- 数据加载失败保护辅助（v1 教训：bookmarks.json 曾因 TDZ fallback 被覆盖为 []）----
+// 加载失败时把原文件复制为 .bak 保留数据，配合下方 bookmarks 段的"锁定写入"防止再次覆盖。
+// feeds / syscards / modes / buttons 暂不接（TDZ 顺序修复后它们的加载路径已无同类问题）。
+function backupCorruptedData(filePath, reason) {
+  try {
+    if (fs.existsSync(filePath)) {
+      const bakPath = filePath + '.bak';
+      fs.copyFileSync(filePath, bakPath);
+      console.error('[BACKUP] ' + filePath + ' -> ' + bakPath + ' (reason: ' + reason + ')');
+    }
+  } catch (e) {
+    console.error('备份失败数据失败:', e.message);
+  }
+}
+
 // ---- dida 卡片配置 ----
 const DIDA_STATE_PATH = path.join(ROOT, 'dida-state.json'); // 每日执行记录（卡片"点过一次当天隐藏"依据）
 // 新建 DSH 对话的工作目录（按钮可配 cwd 覆盖；config.json 的 didaDefaultCwd）
@@ -252,6 +332,11 @@ function queryDeepSeekBalance() {
 }
 
 // ---- 书签持久化 ----
+// 启动加载状态：true = 加载失败（文件存在但解析异常 / TDZ / 解析结果非数组）；false = 正常或文件不存在。
+// 加载失败时必须拒绝 saveBookmarks 写入——否则内存空数组会把原文件覆盖为 []。
+// 真实事故（v1 升级期）：MODE_HIDDEN_SENTINEL TDZ → catch 兜底 → 内存 [] → 用户测试触发
+// POST+DELETE → saveBookmarks 覆盖原文件 → 书签全部丢失。详见 DEV §8 2026-08-19 + §0 第 9 条铁律。
+let bookmarksLoadFailed = false;
 let bookmarks = [];
 try {
   if (fs.existsSync(BOOKMARKS_PATH)) {
@@ -263,13 +348,26 @@ try {
         ...b,
         mode: (b && 'mode' in b) ? normalizeModeField(b.mode) : null,
       }));
+    } else {
+      // 文件存在但不是数组（结构损坏）→ 备份原文件 + 标记失败
+      backupCorruptedData(BOOKMARKS_PATH, 'parsed value is not an array');
+      bookmarksLoadFailed = true;
     }
   }
+  // 文件不存在 = 全新安装，正常空状态，不算失败
 } catch (e) {
   console.error('读取 bookmarks.json 失败:', e.message);
+  backupCorruptedData(BOOKMARKS_PATH, e.message);
+  bookmarksLoadFailed = true;
 }
 
 function saveBookmarks() {
+  if (bookmarksLoadFailed) {
+    // 加载失败时拒绝写入：宁可服务不可写，也不让空数组覆盖原文件。
+    // 恢复路径：手动从 bookmarks.json.bak 恢复内容到 bookmarks.json，然后重启服务。
+    console.error('[FATAL] 拒绝写入 bookmarks.json：启动加载失败，备份在 ' + BOOKMARKS_PATH + '.bak。请手动检查并从 .bak 恢复后重启服务。');
+    return false;
+  }
   try {
     fs.writeFileSync(BOOKMARKS_PATH, JSON.stringify(bookmarks, null, 2), 'utf8');
   } catch (e) {
@@ -284,65 +382,14 @@ function saveBookmarks() {
 // 字段语义与 bookmarks/feeds 同款：null = 全部模式可见；字符串 = 单模式；数组 = 多模式；'__hidden__' = 隐藏。
 const SYSCARDS_PATH = path.join(ROOT, 'syscards-state.json');
 // ---- RSS 订阅源（信息卡：用户自配 RSS/Atom 源，持久化到 feeds.json）----
-const MODES_PATH = path.join(ROOT, 'modes.json');
+// 注意：MODES_PATH / DEFAULT_MODES / MODES 加载逻辑已上移至 file 顶部「模式处理基础设施」块，
+// 原因：bookmarks.json 加载段调用 normalizeModeField 时 MODES 尚未初始化 → TDZ → 书签数据丢失。
+// 见 DEV §8 2026-08-19 条目 + §0 第 9 条铁律。
 
-// ---- 模式定义（modes.json：可扩展模式列表 + 每模式 readonly 等元数据） ----
-// 启动时读取；文件缺失或解析失败 → 回退内置默认（work / entertainment）；
-// 这样 modes.json 误删 / 损坏 / 首次部署都不会让服务起不来，符合 fresh clone 鲁棒性原则。
-// 加新模式 = 改 modes.json 一行，零代码改动（前端动态渲染切换器 + 后端白名单校验）。
-const DEFAULT_MODES = {
-  default: 'work',
-  modes: [
-    { id: 'work', name: '工作', icon: '▣', readonly: true, description: '工作模式' },
-    { id: 'entertainment', name: '娱乐', icon: '▶', readonly: false, description: '娱乐模式' },
-  ],
-};
-let MODES = DEFAULT_MODES;
-try {
-  if (fs.existsSync(MODES_PATH)) {
-    const raw = fs.readFileSync(MODES_PATH, 'utf8').replace(/^\uFEFF/, '');
-    const parsed = JSON.parse(raw);
-    if (parsed && Array.isArray(parsed.modes) && parsed.modes.length) {
-      // 校验每条模式：必须有 id 字符串（其他字段缺省回退），非法项丢弃
-      const valid = parsed.modes.filter((m) => m && typeof m.id === 'string' && m.id);
-      if (valid.length) {
-        MODES = {
-          default: (typeof parsed.default === 'string' && valid.some((m) => m.id === parsed.default)) ? parsed.default : valid[0].id,
-          modes: valid.map((m) => ({
-            id: m.id,
-            name: typeof m.name === 'string' ? m.name : m.id,
-            icon: typeof m.icon === 'string' ? m.icon : '',
-            readonly: m.readonly === true,
-            description: typeof m.description === 'string' ? m.description : '',
-          })),
-        };
-      }
-    }
-  }
-} catch (e) {
-  console.error('读取 modes.json 失败，使用内置默认:', e.message);
-}
-
-// 模式白名单：服务端校验 mode 字段（书签 / RSS 标 mode 时只接受存在的模式 id）
-// v0.8：'__hidden__' 是 UI 上"隐藏"按钮对应的 sentinel 值（所有模式都不可见），
-// 单独识别——不属于 MODES.modes 列表，但合法需要透传。
-const MODE_HIDDEN_SENTINEL = '__hidden__';
-function isValidModeId(id) {
-  if (id == null) return true; // null/undefined = 全部模式可见，始终合法
-  if (typeof id !== 'string') return false;
-  if (id === MODE_HIDDEN_SENTINEL) return true; // v0.8：hidden sentinel 单独识别
-  return MODES.modes.some((m) => m.id === id);
-}
-// 规范化 mode 字段：null 维持、字符串保留、数组项逐一校验后过滤
-function normalizeModeField(m) {
-  if (m == null) return null;
-  if (typeof m === 'string') return isValidModeId(m) ? m : null;
-  if (Array.isArray(m)) {
-    const arr = m.filter((x) => typeof x === 'string' && isValidModeId(x));
-    return arr.length ? arr : null;
-  }
-  return null;
-}
+// ---- 模式定义 / 工具函数基础设施已上移至 file 顶部「模式处理基础设施」块（line 64 附近）----
+// 原本段代码（MODES_PATH / DEFAULT_MODES / MODES 加载 + MODE_HIDDEN_SENTINEL / isValidModeId / normalizeModeField）
+// 已统一上移，确保 bookmarks/feeds/syscards 加载段调用 normalizeModeField 时全部就绪。
+// TDZ 静默 fallback 事故见 DEV §8 2026-08-19 条目 + §0 第 9 条铁律。
 
 // ---- 系统信息卡 mode 持久化（syscards-state.json：8 张内置信息卡的 mode 字段）----
 // SYS_CARDS 是 app.js 内置的（keyed 渲染复用 DOM），无 buttons.json 这种配置文件；
@@ -1445,7 +1492,7 @@ const server = http.createServer(async (req, res) => {
 
   // 书签列表
   if (p === '/api/bookmarks' && req.method === 'GET') {
-    return json(res, { bookmarks });
+    return json(res, { bookmarks, loadFailed: bookmarksLoadFailed });
   }
 
   // 新增书签

@@ -2613,6 +2613,28 @@ body[data-sidebar="off"] .expand-sidebar { display: none !important; }
 #toast.err { background: rgba(220, 38, 38, .95); }
 #toast.warn { background: rgba(180, 83, 9, .95); }
 
+/* ---- 启动加载失败横幅（v1 防护：bookmarks.json TDZ/损坏时顶部红条告警）---- */
+.bm-load-failed-banner {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  padding: 12px 20px;
+  background: rgba(220, 38, 38, .95);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1.5;
+  text-align: center;
+  border-bottom: 1px solid rgba(0, 0, 0, .2);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .15);
+}
+.bm-load-failed-banner strong { color: #fff; margin-right: 4px; }
+.bm-load-failed-banner code {
+  background: rgba(0, 0, 0, .25);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
 /* ---- 书签小图标 ---- */
 .bm-fav {
   width: 16px;
