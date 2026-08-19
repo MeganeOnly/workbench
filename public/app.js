@@ -64,1069 +64,9 @@
   const renderModeTags = WB.renderModeTags;
 
   // ---- 系统信息卡定义 / 卡片图标 / 数字滚动动画 已抽到 wb-core.js（顶部 const SYS_CARDS = WB.SYS_CARDS 引入） ----
-  // 卡片顺序持久化（localStorage，仅本机浏览器）
-  const ORDER_KEY = 'workbench-card-order';
 
-  // ---- 数据获取 / 客户端错误上报 已抽到 wb-core.js（顶部 const fetchJSON / reportClientError 引入；全局 error/unhandledrejection 监听也在 wb-core.js） ----
-  // ---- DeepSeek 峰谷定价 / 全部 refresh* 函数已抽到 wb-state.js（顶部 const 引入） ----
+  // ---- 所有渲染函数已抽到 wb-render.js（顺序管理 / 卡片尺寸 / keyed 渲染 / ensure*Card / render*Card / applyMasonry 等） ----
 
-  // ---- 顺序管理 ----
-  function defaultOrder() {
-    const func = buttons.map(b => b.id);
-    return [...func, 'sys-balance', 'sys-status', 'sys-dsh-sessions', 'sys-bookmarks', 'sys-dida-today', 'sys-dida-focus', 'sys-minimax', 'sys-rss'];
-  }
-
-  function getOrder() {
-    let saved = null;
-    try { saved = JSON.parse(localStorage.getItem(ORDER_KEY)); } catch (e) { saved = null; }
-    const base = defaultOrder();
-    if (!Array.isArray(saved)) return base;
-    const known = new Set(base);
-    const merged = saved.filter(id => known.has(id));
-    for (const id of base) if (!merged.includes(id)) merged.push(id);
-    return merged;
-  }
-
-  function setOrder(order) {
-    try { localStorage.setItem(ORDER_KEY, JSON.stringify(order)); } catch (e) { /* 忽略 */ }
-  }
-
-  // ---- 模式匹配已抽到 wb-mode.js（顶部 const modeMatches = WB.modeMatches 引入） ----
-
-  // ---- 卡片尺寸 ----
-  function spanClass(size) {
-    if (size === 'large') return 'span-large';
-    if (size === 'small') return 'span-small';
-    return 'span-wide';
-  }
-
-  // ---- 顶栏快速搜索 + 模式过滤：书签同时受搜索词与当前模式约束 ----
-  // mode 字段语义与按钮一致：null/缺失 = 全部模式可见；modeMatches(bm.mode) 判定当前模式可见性
-  function bmMatches(bm) {
-    if (!modeMatches(bm.mode)) return false;   // 模式不匹配则直接出局
-    if (!searchQ) return true;
-    return (bm.name || '').toLowerCase().includes(searchQ) || (bm.url || '').toLowerCase().includes(searchQ);
-  }
-
-  function cardMatchesSearch(id) {
-    if (SYS_CARDS[id]) {
-      // 模式过滤：当前模式下的卡才参与搜索
-      if (!modeMatches(SYS_CARDS[id].mode)) return false;
-      if ((SYS_CARDS[id].name || '').toLowerCase().includes(searchQ)) return true;
-      // 书签卡：任一书签名/网址命中即保留（卡内只显示命中的书签）
-      if (id === 'sys-bookmarks') return bookmarks.some(bmMatches);
-      return false;
-    }
-    const b = buttons.find(x => x.id === id);
-    if (!b) return false;
-    // 模式过滤：当前模式下的按钮才参与搜索
-    if (!modeMatches(b.mode)) return false;
-    return (b.name || '').toLowerCase().includes(searchQ)
-      || (b.description || '').toLowerCase().includes(searchQ)
-      || (b.id || '').toLowerCase().includes(searchQ);
-  }
-
-  // 回车：执行顺序中第一个匹配（功能卡 = 点击执行；书签卡 = 打开第一本命中的书签）
-  function runFirstSearchMatch() {
-    if (!searchQ) return;
-    for (const id of getOrder()) {
-      if (!cardMatchesSearch(id)) continue;
-      if (SYS_CARDS[id]) {
-        if (id === 'sys-bookmarks') {
-          const bm = bookmarks.find(bmMatches);
-          if (bm) openExternal(bm.url);
-        }
-        continue; // 其余信息卡没有"执行"语义
-      }
-      const b = buttons.find(x => x.id === id);
-      if (b && b.visible !== false) { runButton(b); return; }
-    }
-  }
-
-  // ---- keyed 渲染：卡片缓存（轮询刷新复用 DOM，不打断拖拽） ----
-  const cardCache = new Map(); // id -> { el, refs, current }
-  let dragActive = false;
-
-  function ensureFuncCard(id, size) {
-    const hit = cardCache.get(id);
-    if (hit) return hit;
-    const el = document.createElement('div');
-    el.className = 'card ' + spanClass(size);
-    el.dataset.id = id;
-    // readonly 模式（modes.json 中该模式 readonly=true）不渲染拖拽手柄——卡片不可拖动换位
-    const dragHint = isReadonlyMode() ? '' : '<span class="drag-hint" title="按住拖动换位">⠿</span>';
-    el.innerHTML =
-      '<div class="card-head"><h3><span class="card-icon"></span><span class="card-title"></span></h3><span class="badge"></span></div>' +
-      dragHint +
-      '<button type="button" class="run-btn"></button>';
-    const refs = {
-      el,
-      h3: el.querySelector('h3'),
-      icon: el.querySelector('.card-icon'),
-      title: el.querySelector('.card-title'),
-      badge: el.querySelector('.badge'),
-      btn: el.querySelector('.run-btn'),
-      queue: null, // Push 卡：队列数量行（队列信息已并入 push 卡）
-      last: null,
-    };
-    // 铁律：rec 必须先于监听器声明——点击回调只认 rec.current（与 renderFuncCard 的赋值
-    // 共用同一属性，单一真源）。曾因监听器读 refs.current、渲染写 rec.current 导致
-    // 属性永不赋值、点击静默失效（"点了没反应"），严禁再引入第二个 current 属性。
-    const rec = { el, refs, current: null };
-    refs.btn.addEventListener('click', () => {
-      if (rec.current) runButton(rec.current);
-    });
-    // 执行入口只有 run-btn 按钮：卡片标题/空白处点击不触发执行（用户明确要求
-    // "只有按到按钮才启动"，整卡可点范围太宽已移除）。拖拽仍只从 ⠿ 手柄触发。
-    cardCache.set(id, rec);
-    return rec;
-  }
-
-  function ensureSystemCard(id) {
-    const hit = cardCache.get(id);
-    if (hit) return hit;
-    const def = SYS_CARDS[id];
-    const el = document.createElement('div');
-    // readonly 模式不渲染拖拽手柄（与 ensureFuncCard 同款）
-    const dragHint = isReadonlyMode() ? '' : '<span class="drag-hint" title="按住拖动换位">⠿</span>';
-    el.className = 'card stat-card ' + spanClass(def.size);
-    el.dataset.id = id;
-    const refs = { el };
-    if (id === 'sys-balance') {
-      el.innerHTML =
-        '<div class="card-head"><h3><span class="card-icon"></span>DeepSeek 余额</h3></div>' +
-        dragHint +
-        '<div class="stat-value">查询中...</div>';
-      refs.value = el.querySelector('.stat-value');
-      bindCardClick(el, () => openExternal('https://platform.deepseek.com/usage'));
-    } else if (id === 'sys-status') {
-      el.innerHTML =
-        '<div class="card-head"><h3><span class="card-icon"></span>系统状态</h3></div>' +
-        dragHint +
-        '<div class="status-list">' +
-        '  <div class="status-row"><span class="row-dot"></span><span class="row-label">DeepSeek Harness</span><span class="row-value">查询中</span></div>' +
-        '  <div class="status-row"><span class="row-dot"></span><span class="row-label">工作台服务</span><span class="row-value">查询中</span></div>' +
-        '</div>';
-      refs.rows = el.querySelectorAll('.status-row');
-    } else if (id === 'sys-dsh-sessions') {
-      // DSH 对话状态卡（v0.5.2 极简收口：仅 working 渲染圆点 + meta，其它状态整段 .dsh-status 隐藏）
-      // 仅 working 圆点+文字可见；idle / offline / error / loading 时卡片塌缩到只剩标题"DSH 对话"作为静态标识符
-      el.innerHTML =
-        '<div class="card-head"><h3><span class="card-icon"></span>DSH 对话</h3></div>' +
-        dragHint +
-        '<div class="dsh-status">' +
-          '<div class="dsh-dots"></div>' +
-          '<div class="dsh-meta">—</div>' +
-        '</div>';
-      refs.status = el.querySelector('.dsh-status');
-      refs.dots = el.querySelector('.dsh-dots');
-      refs.meta = el.querySelector('.dsh-meta');
-      // 点击卡片 → 跳 DSH 3080（如果 DSH 在线；离线态 toast 警示）
-      bindCardClick(el, () => {
-        if (!dshSessions || dshSessions.status === 'offline' || dshSessions.status === 'error') {
-          showToast('DSH 当前离线，无法跳转', 'warn');
-        } else {
-          openExternal('http://127.0.0.1:3080/');
-        }
-      });
-    } else if (id === 'sys-bookmarks') {
-      // readonly 模式不渲染卡片内的 + 添加按钮（add bookmark 由 CSS 兜底隐藏）
-      const addBtn = isReadonlyMode() ? '' : '<button class="add-btn" id="card-add-bookmark" title="添加书签">+</button>';
-      el.innerHTML =
-        '<div class="card-head"><h3><span class="card-icon"></span>书签</h3>' +
-        addBtn + '</div>' +
-        dragHint +
-        '<ul class="bm-card-list"></ul>';
-      refs.list = el.querySelector('.bm-card-list');
-      const cardAdd = el.querySelector('#card-add-bookmark');
-      if (cardAdd) cardAdd.addEventListener('click', (e) => {
-        e.stopPropagation();
-        openModal();
-      });
-    } else if (id === 'sys-dida-today') {
-      el.innerHTML =
-        '<div class="card-head"><h3><span class="card-icon"></span>滴答今日任务</h3></div>' +
-        dragHint +
-        '<div class="dida-task-list"></div>';
-      refs.list = el.querySelector('.dida-task-list');
-    } else if (id === 'sys-dida-focus') {
-      el.innerHTML =
-        '<div class="card-head"><h3><span class="card-icon"></span>滴答专注</h3></div>' +
-        dragHint +
-        '<div class="stat-value">—</div>';
-      refs.value = el.querySelector('.stat-value');
-      // 点击卡片 → 跳转滴答清单应用（优先桌面客户端：未运行则启动、已运行则置顶；
-      // 快捷方式按钮不存在时回退滴答网页）。与余额卡"点击跳转"交互一致。
-      bindCardClick(el, () => {
-        const app = buttons.find(x => x.id === 'app') || buttons.find(x => x.name === '滴答清单');
-        if (app) runButton(app);
-        else openExternal('https://www.dida365.com/webapp/');
-      });
-    } else if (id === 'sys-minimax') {
-      el.innerHTML =
-        '<div class="card-head"><h3><span class="card-icon"></span>MiniMax 套餐</h3></div>' +
-        dragHint +
-        '<div class="mmx-body">' +
-          '<div class="mmx-row" data-window="5h">' +
-            '<div class="mmx-label">5 小时</div>' +
-            '<div class="mmx-bar"><div class="mmx-bar-fill"></div></div>' +
-            '<div class="mmx-pct">—</div>' +
-            '<div class="mmx-sub">—</div>' +
-          '</div>' +
-          '<div class="mmx-row" data-window="week">' +
-            '<div class="mmx-label">周限额</div>' +
-            '<div class="mmx-bar"><div class="mmx-bar-fill"></div><div class="mmx-bar-marker"><svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M 5 0 Q 10 5, 5 10" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></div></div>' +
-            '<div class="mmx-pct">—</div>' +
-            '<div class="mmx-sub">—</div>' +
-          '</div>' +
-          '<div class="mmx-meta"></div>' +
-          '<div class="mmx-alert" style="display:none"></div>' +
-        '</div>';
-      refs.rows = {
-        '5h':  {
-          row: el.querySelector('.mmx-row[data-window="5h"]'),
-          fill: el.querySelector('.mmx-row[data-window="5h"]   .mmx-bar-fill'),
-          pct: el.querySelector('.mmx-row[data-window="5h"]   .mmx-pct'),
-          sub: el.querySelector('.mmx-row[data-window="5h"]   .mmx-sub'),
-        },
-        week: {
-          row: el.querySelector('.mmx-row[data-window="week"]'),
-          fill: el.querySelector('.mmx-row[data-window="week"] .mmx-bar-fill'),
-          marker: el.querySelector('.mmx-row[data-window="week"] .mmx-bar-marker'),
-          pct: el.querySelector('.mmx-row[data-window="week"] .mmx-pct'),
-          sub: el.querySelector('.mmx-row[data-window="week"] .mmx-sub'),
-        },
-      };
-      refs.meta = el.querySelector('.mmx-meta');
-      refs.alert = el.querySelector('.mmx-alert');
-      refs.value = el.querySelector('.stat-value'); // 错误态用
-      bindCardClick(el, () => openExternal('https://platform.minimaxi.com/console/personal-info'));
-    } else if (id === 'sys-rss') {
-      el.innerHTML =
-        '<div class="card-head"><h3><span class="card-icon"></span>RSS 订阅</h3></div>' +
-        dragHint +
-        '<div class="rss-list"></div>';
-      refs.list = el.querySelector('.rss-list');
-    }
-    applyCardIcon(el.querySelector('.card-icon'), { id });
-    const rec = { el, refs, current: null };
-    cardCache.set(id, rec);
-    return rec;
-  }
-
-  // ---- 渲染功能卡内容 ----
-  function renderFuncCard(b) {
-    const rec = ensureFuncCard(b.id, b.size);
-    const { el, refs } = rec;
-    // 尺寸可能被修改（设置面板改宽/窄）：keyed 缓存复用 DOM，必须每次重设 span 类，
-    // 否则改尺寸后卡片宽度不变（曾因此"宽窄没用"）。
-    // 快捷方式启动卡（带 command 的普通按钮）标记 shortcut-card：方形紧凑布局
-    const isShortcut = !!(b.command && !b.toggle && !b.kind);
-    el.className = 'card ' + spanClass(b.size) + (isShortcut ? ' shortcut-card' : '');
-    // 唯一真源：点击监听器（ensureFuncCard）与这里都只认 rec.current，
-    // 不要另设 refs.current——曾因读写属性不一致导致点击静默失效。
-    rec.current = b;
-    applyCardIcon(refs.icon, b);
-
-    refs.title.textContent = b.name;
-
-    let badgeText = '无状态';
-    let badgeCls = '';
-    if (b.kind === 'push') {
-      if (b.lastPush) {
-        badgeText = b.lastPush.active ? '活跃 · ' + b.lastPush.text : b.lastPush.text;
-        if (b.lastPush.active) badgeCls = 'on';
-      } else {
-        badgeText = '从未 push';
-      }
-    } else if (b.kind === 'dida') {
-      // 可见 = 已到显示时间且（每天/本周）还没点过；weekly 按钮徽章按周期显示
-      badgeText = b.weekly ? '本周待办' : '今日待办';
-      badgeCls = 'on';
-    } else if (b.running === true) {
-      badgeText = '运行中';
-      badgeCls = 'on';
-    } else if (b.running === false) {
-      badgeText = '已停止';
-      badgeCls = 'off';
-    }
-    refs.badge.textContent = badgeText;
-    refs.badge.className = 'badge' + (badgeCls ? ' ' + badgeCls : '');
-
-    // push 卡片：队列数量（原独立「Anki 队列」卡已并入）+「上次 push」行 + 高峰提醒
-    if (b.kind === 'push') {
-      // 队列数量行：待推送 / 共 N 条（有待推送时高亮 .hot，文件缺失/读取失败置灰 .off）
-      if (!refs.queue) {
-        refs.queue = document.createElement('p');
-        refs.queue.className = 'queue-line';
-        el.insertBefore(refs.queue, refs.btn);
-      }
-      if (!queueInfo) {
-        refs.queue.textContent = '队列读取中...';
-        refs.queue.className = 'queue-line';
-      } else if (!queueInfo.exists) {
-        refs.queue.textContent = '队列文件不存在';
-        refs.queue.className = 'queue-line off';
-      } else if (queueInfo.error) {
-        refs.queue.textContent = queueInfo.error;
-        refs.queue.className = 'queue-line off';
-      } else {
-        const pending = queueInfo.pending;
-        refs.queue.textContent = '队列: 待推送 ' + pending + ' / 共 ' + queueInfo.total + ' 条';
-        refs.queue.className = 'queue-line' + (pending > 0 ? ' hot' : '');
-      }
-      if (!refs.last) {
-        refs.last = document.createElement('p');
-        refs.last.className = 'last-push-line';
-        refs.last.id = 'last-push-line';
-        el.insertBefore(refs.last, refs.btn);
-      }
-      refs.last.textContent = b.lastPush ? '上次 push: ' + b.lastPush.text : '';
-      // 高峰时段提醒（费用翻倍）
-      if (isPeakHour(new Date())) {
-        if (!refs.note) {
-          refs.note = document.createElement('p');
-          refs.note.className = 'rate-note';
-          refs.note.textContent = '当前高峰价时段（9-12 / 14-18），费用为半价时段 2 倍';
-          el.insertBefore(refs.note, refs.btn);
-        }
-      } else if (refs.note) {
-        refs.note.remove();
-        refs.note = null;
-      }
-    } else {
-      if (refs.queue) { refs.queue.remove(); refs.queue = null; }
-      if (refs.last) { refs.last.remove(); refs.last = null; }
-      if (refs.note) { refs.note.remove(); refs.note = null; }
-    }
-
-    // 按钮
-    let label = '执行';
-    let disabled = !!busy[b.id];
-    if (b.toggle) {
-      label = b.action.label;
-    } else if (b.kind === 'push') {
-      if (busy[b.id]) {
-        label = '执行中...';
-      } else if (b.locked) {
-        label = '锁定中 · 剩余 ' + b.lockedMinutes + ' 分钟';
-        disabled = true;
-      } else {
-        label = 'Push';
-      }
-    } else if (busy[b.id]) {
-      label = '执行中...';
-    }
-    refs.btn.textContent = label;
-    refs.btn.style.background = b.toggle
-      ? (b.action.color || 'var(--accent-deep)')
-      : (b.color || 'var(--accent-deep)');
-    refs.btn.disabled = disabled;
-    // 执行中给按钮加 busy 类，触发 CSS 脉冲动画（"按下后动起来"的执行反馈）
-    refs.btn.classList.toggle('busy', !!busy[b.id]);
-  }
-
-  // ---- 渲染系统卡内容 ----
-  function renderSystemCard(id) {
-    const rec = ensureSystemCard(id);
-    const { refs } = rec;
-    const countupOn = (document.body.dataset.countup || 'on') === 'on';
-    if (id === 'sys-balance') {
-      if (!balanceData) return;
-      if (!balanceData.ok) {
-        refs.value.className = 'stat-value err';
-        refs.value.textContent = '获取失败';
-        refs.value.title = balanceData.error || '';
-        return;
-      }
-      refs.value.title = '';
-      const total = balanceData.total;
-      if (total < 1) {
-        refs.value.className = 'stat-value err';
-        refs.value.textContent = '余额不足';
-      } else {
-        refs.value.className = 'stat-value';
-        setNum(refs.value, total, countupOn, v => '¥' + v.toFixed(2));
-      }
-    } else if (id === 'sys-status') {
-      const dsh = buttons.find(b => b.port === 3080);
-      const rows = [
-        {
-          dotCls: dsh ? (dsh.running ? 'ok' : 'off') : 'off',
-          label: 'DeepSeek Harness',
-          value: dsh ? (dsh.running ? '运行中' : '已停止') : '未知',
-        },
-        {
-          dotCls: workbenchOnline ? 'ok' : 'off',
-          label: '工作台服务',
-          value: workbenchOnline ? '在线' : '离线',
-        },
-      ];
-      refs.rows.forEach((row, i) => {
-        const r = rows[i];
-        if (!r) return;
-        row.querySelector('.row-dot').className = 'row-dot ' + r.dotCls;
-        row.querySelector('.row-value').textContent = r.value;
-      });
-    } else if (id === 'sys-bookmarks') {
-      refs.list.innerHTML = '';
-      // 卡片墙：mode 优先过滤，搜索词叠加（与侧栏同款语义；6 条上限）
-      const modeFiltered = bookmarks.filter((bm) => modeMatches(bm.mode));
-      const shown = searchQ ? modeFiltered.filter(bmMatches) : modeFiltered;
-      if (!shown.length) {
-        const li = document.createElement('li');
-        li.className = 'bm-card-empty';
-        li.textContent = searchQ ? '没有匹配的书签' : (modeFiltered.length === 0 && bookmarks.length > 0 ? '当前模式下没有书签' : '暂无书签，点侧栏 + 添加');
-        refs.list.appendChild(li);
-        return;
-      }
-      shown.slice(0, 6).forEach(bm => {
-        // 卡片墙版本：<a> 链接 + ✎ 编辑按钮（hover 显示；工作模式编辑按钮隐藏）
-        const item = document.createElement('span');
-        item.className = 'bm-item';
-        item.dataset.bmId = bm.id;
-        const a = document.createElement('a');
-        a.className = 'bm-name';
-        a.href = bm.url;
-        a.target = '_blank';
-        a.rel = 'noopener';
-        a.draggable = false;
-        const fav = faviconImg(bm.url);
-        if (fav) a.appendChild(fav);
-        a.appendChild(document.createTextNode(bm.name));
-        a.title = bm.url;
-        item.appendChild(a);
-        // 编辑按钮：娱乐模式才渲染，复用 openModal(bm.id)
-        if (!isReadonlyMode()) {
-          const edit = document.createElement('button');
-          edit.type = 'button';
-          edit.className = 'bm-edit-inline bm-remove';
-          edit.textContent = '✎';
-          edit.title = '编辑（修改名称 / 网址 / 显示模式）';
-          edit.addEventListener('click', (e) => {
-            e.stopPropagation();
-            e.preventDefault();
-            openModal(bm.id);
-          });
-          item.appendChild(edit);
-        }
-        refs.list.appendChild(item);
-      });
-    } else if (id === 'sys-dida-today') {
-      // grid 布局：今日任务卡限高（每列少显示几条），避免大卡把同行的其他卡拉长
-      const layout = document.body.dataset.layout || 'grid';
-      // 展开 → 突破 max-height，显示全部任务（两列联动，瀑布流自动重新计算高度）
-      rec.el.classList.toggle('expanded', didaTodayExpanded);
-      renderDidaTodayList(refs.list, layout === 'grid' ? 5 : 8);
-    } else if (id === 'sys-dida-focus') {
-      renderDidaFocus(refs.value);
-    } else if (id === 'sys-dsh-sessions') {
-      renderDshSessionsCard(refs);
-    } else if (id === 'sys-minimax') {
-      renderMiniMaxCard(refs);
-    } else if (id === 'sys-rss') {
-      renderRssList(refs.list);
-    }
-  }
-
-  // ---- MiniMax 套餐渲染：5h / 周窗口进度条 + 警示 ----
-  // 警示规则（D009 + 2026-08-16 修订）：
-  //   - 5h 剩余 < 15%：行加 .danger（标签/百分比/进度条变红）。无 alert、无红框
-  //     —— 进度条本身变红已足够表达"快耗尽"，红框与额外文字过于抢眼
-  //   - dailyPace > 3：周 row 加 .danger（无红框）+ 5h row 加 .warn + alert 文案
-  //     "周限额非常充裕..."（保留信息密度，视觉强度与 5h 统一）
-  //   - dailyPace > 2：周 row 加 .warn, .warn-strong（琥珀脉冲）+ alert 文案
-  //   - dailyPace > 1.5：周 row 加 .warn（弱高亮）
-  //   - 其他：正常
-  //   - meta 行整行隐藏：modelName 永远是 "general"（MiniMax API 固定返回，无区分度），
-  //     pace 节奏"需 X 个 5h/d 才不浪费周"孤立无上下文、用户反馈没说清楚。保留 DOM 节点
-  function formatResetAt(epochSec) {
-    if (!epochSec) return '';
-    const d = new Date(epochSec * 1000);
-    const today = new Date();
-    const isSameDay = d.getFullYear() === today.getFullYear()
-      && d.getMonth() === today.getMonth()
-      && d.getDate() === today.getDate();
-    const hh = String(d.getHours()).padStart(2, '0');
-    const mm = String(d.getMinutes()).padStart(2, '0');
-    if (isSameDay) return '重置 ' + hh + ':' + mm;
-    const dayDelta = Math.round((d.getTime() - today.getTime()) / 86400000);
-    if (dayDelta === 1) return '明日 ' + hh + ':' + mm + ' 重置';
-    if (dayDelta > 1) return dayDelta + ' 天后重置';
-    return '已重置';
-  }
-  function renderMiniMaxCard(refs) {
-    if (!minimaxData) {
-      refs.rows['5h'].pct.textContent = '读取中...';
-      refs.rows.week.pct.textContent = '';
-      refs.meta.textContent = '';
-      return;
-    }
-    if (!minimaxData.ok) {
-      refs.rows['5h'].pct.textContent = '—';
-      refs.rows.week.pct.textContent = '—';
-      refs.alert.style.display = 'block';
-      refs.alert.className = 'mmx-alert err';
-      refs.alert.textContent = '获取失败：' + (minimaxData.error || '未知');
-      refs.alert.title = minimaxData.error || '';
-      refs.meta.textContent = '';
-      return;
-    }
-    const windows = minimaxData.windows || {};
-    const w5h = windows['5h'];
-    const wweek = windows.week;
-    const now = Date.now();
-
-    // 5h 窗口
-    if (w5h && w5h.remainingPct != null) {
-      const pct5 = w5h.remainingPct;
-      refs.rows['5h'].fill.style.width = pct5.toFixed(1) + '%';
-      refs.rows['5h'].pct.textContent = pct5.toFixed(0) + '% 剩';
-      const resetText5h = formatResetIn(w5h.resetAt, now);
-      refs.rows['5h'].sub.textContent = resetText5h;
-      refs.rows['5h'].row.title = '5 小时窗口 · 剩余 ' + pct5.toFixed(1) + '% · ' + resetText5h;
-    } else {
-      refs.rows['5h'].fill.style.width = '0%';
-      refs.rows['5h'].pct.textContent = '—';
-      refs.rows['5h'].sub.textContent = '';
-      refs.rows['5h'].row.title = '';
-    }
-    // 周窗口
-    if (wweek && wweek.remainingPct != null) {
-      const pctW = wweek.remainingPct;
-      refs.rows.week.fill.style.width = pctW.toFixed(1) + '%';
-      refs.rows.week.pct.textContent = pctW.toFixed(0) + '% 剩';
-      const resetTextWeek = formatResetIn(wweek.resetAt, now);
-      refs.rows.week.sub.textContent = resetTextWeek;
-      refs.rows.week.row.title = '周限额 · 剩余 ' + pctW.toFixed(1) + '% · ' + resetTextWeek;
-    } else {
-      refs.rows.week.fill.style.width = '0%';
-      refs.rows.week.pct.textContent = '—';
-      refs.rows.week.sub.textContent = '';
-      refs.rows.week.row.title = '';
-    }
-
-    // 警示判断（核心逻辑：D009）
-    //   ratio = 周限额相当于多少个 5h 限额（默认 10，按用户描述；可在 config.json 的
-    //   minimaxWeeklyHourlyRatio 覆盖）。weeklyRemainingInHours = pW × ratio 即"周剩余相当于
-    //   多少个 5h 限额"；daysToReset = 距周重置的天数；dailyPaceNeeded = weeklyRemainingInHours /
-    //   daysToReset —— 即"按当前周剩余量，平均每天需要用几个 5h 限额才不会浪费周限额"。
-    //   - dailyPaceNeeded > 3：高级警示 .danger（红）："每天 3 个 5h 都不够消耗周限额"
-    //   - dailyPaceNeeded > 2：中级警示 .warn（琥珀）："每天需用 2 个 5h 才能不浪费周"
-    //   - 否则正常（仍显示 dailyPaceNeeded，让用户掌握节奏）
-    const ratio = (minimaxData && minimaxData.weeklyHourlyRatio) || 10;
-    const pct5h = w5h ? w5h.remainingPct : null;
-    const pctW  = wweek ? wweek.remainingPct : null;
-    refs.rows['5h'].row.classList.remove('warn', 'danger', 'warn-strong');
-    refs.rows.week.row.classList.remove('warn', 'danger', 'warn-strong');
-    refs.alert.style.display = 'none';
-    refs.alert.className = 'mmx-alert';
-    refs.alert.textContent = '';
-    refs.alert.title = '';
-
-    let dailyPace = null;
-    let daysToReset = null;
-    let expectedRemainingPct = null;
-    if (pctW != null && wweek && wweek.resetAt) {
-      const ms = wweek.resetAt * 1000 - now;
-      daysToReset = Math.max(0.1, ms / 86400000);
-      const weeklyRemainingInHours = (pctW / 100) * ratio;
-      dailyPace = weeklyRemainingInHours / daysToReset;
-      // 「按节奏应剩」标记线（2026-08-18 新增）：用 API 返回的 windowMinutes（动态周期）作分母，
-      // 应剩余 = 剩余时间 / 总周期。fill 长度 < marker 位置 = 实际剩余比应剩多 = 用得太少。
-      if (wweek.windowMinutes && wweek.windowMinutes > 0) {
-        expectedRemainingPct = Math.max(0, Math.min(100, (ms / (wweek.windowMinutes * 60 * 1000)) * 100));
-      }
-    }
-    // 写 marker 位置（null → 隐藏，e.g. windowMinutes 缺失 / resetAt 已过）
-    const marker = refs.rows.week.marker;
-    if (marker) {
-      if (expectedRemainingPct != null) {
-        marker.style.left = expectedRemainingPct.toFixed(2) + '%';
-        marker.style.display = '';
-        marker.title = '按节奏应剩 ' + expectedRemainingPct.toFixed(1) + '%（窗口总 ' + (wweek && wweek.windowMinutes ? Math.round(wweek.windowMinutes / 60) + 'h' : '?') + '）';
-      } else {
-        marker.style.display = 'none';
-        marker.title = '';
-      }
-    }
-
-    // meta 行整行隐藏（2026-08-16）：DOM 保留便于未来恢复
-    refs.meta.style.display = 'none';
-
-    let alertKind = null;
-    let alertMsg = '';
-    // 优先级 1：5h 限额快耗尽——仅行高亮，无 alert、无红框（2026-08-16）
-    if (pct5h != null && pct5h < 15) {
-      refs.rows['5h'].row.classList.add('danger');
-    } else if (dailyPace != null && dailyPace > 3) {
-      // 优先级 2：周限额非常充裕（高级警示·红）—— 保留 alert，去掉红框（2026-08-16）
-      alertKind = 'danger';
-      alertMsg = '周限额非常充裕：按当前剩余，每天需用 ' + dailyPace.toFixed(1) + ' 个 5h 限额（3 个都不够）。现在应高强度使用 5h 窗口，否则周限额必浪费';
-      refs.rows.week.row.classList.add('danger');
-      refs.rows['5h'].row.classList.add('warn');
-    } else if (dailyPace != null && dailyPace > 2) {
-      // 优先级 3：周限额在浪费（中级警示·琥珀）
-      alertKind = 'warn';
-      alertMsg = '周限额在浪费：按当前剩余，每天需用 ' + dailyPace.toFixed(1) + ' 个 5h 限额才不浪费。建议接下来 5h 窗口都用满';
-      refs.rows.week.row.classList.add('warn', 'warn-strong');
-    } else if (dailyPace != null && dailyPace > 1.5) {
-      // 接近 2 倍但未到，提供参考但不强警告
-      refs.rows.week.row.classList.add('warn');
-    }
-    if (alertMsg) {
-      refs.alert.style.display = 'block';
-      refs.alert.classList.add(alertKind === 'danger' ? 'err' : 'warn');
-      refs.alert.textContent = alertMsg;
-      refs.alert.title = alertMsg;
-    }
-    // 正常态不再写入 pace 节奏（meta 行整体 display:none；2026-08-16）
-  }
-
-  // 重置时间显示：「3h2m」「2天 5h」
-  function formatResetIn(epochSec, now) {
-    if (!epochSec) return '';
-    const ms = epochSec * 1000 - now;
-    if (ms <= 0) return '已重置';
-    const mins = Math.floor(ms / 60000);
-    const days = Math.floor(mins / 1440);
-    const rh = Math.floor((mins % 1440) / 60);
-    const rm = mins % 60;
-    if (days >= 1) {
-      return days + '天' + (rh > 0 ? rh + 'h' : '') + '后';
-    }
-    if (mins >= 60) {
-      return Math.floor(mins / 60) + 'h' + (rm > 0 ? rm + 'm' : '') + '后';
-    }
-    return mins + 'm 后';
-  }
-
-  // ---- 滴答今日任务列表渲染（小组件样式：全天 / 定时 两列，各带时间 + 优先级色点 + 标签） ----
-  // maxShow：每列最多显示条数（grid 布局传 5 限高，split/list 传 8 显示更多）
-  // didaTodayExpanded：整体展开状态（点击任一列「还有 N 项」两列联动展开/收起；页面刷新恢复折叠）
-  let didaTodayExpanded = false;
-  function renderDidaTodayList(listEl, maxShow) {
-    listEl.innerHTML = '';
-    if (!didaToday) {
-      const li = document.createElement('li');
-      li.className = 'bm-card-empty';
-      li.textContent = '读取中...';
-      listEl.appendChild(li);
-      return;
-    }
-    if (!didaToday.ok) {
-      const li = document.createElement('li');
-      li.className = 'bm-card-empty';
-      li.textContent = '获取失败: ' + (didaToday.error || '未知错误');
-      listEl.appendChild(li);
-      return;
-    }
-    if (!didaToday.count) {
-      const li = document.createElement('li');
-      li.className = 'bm-card-empty';
-      li.textContent = '今日没有任务';
-      listEl.appendChild(li);
-      return;
-    }
-    const allDayTasks = didaToday.tasks.filter(t => t.allDay);
-    const timedTasks = didaToday.tasks.filter(t => !t.allDay);
-    const MAX_SHOW = maxShow || 8; // 每列默认显示条数
-
-    const taskItem = (t) => {
-      const li = document.createElement('li');
-      li.className = 'dida-task-item';
-      li.title = (t.tags && t.tags.length ? t.tags.join(' · ') + ' · ' : '') + '点击标记为已完成';
-      // 优先级色点：5 高 / 3 中 / 1 低 / 0 无
-      const dot = document.createElement('span');
-      dot.className = 'dida-task-pri' + (t.priority ? ' p' + t.priority : ' p0');
-      li.appendChild(dot);
-      if (t.time) {
-        const tm = document.createElement('span');
-        tm.className = 'dida-task-time';
-        tm.textContent = t.time;
-        li.appendChild(tm);
-      }
-      const tx = document.createElement('span');
-      tx.className = 'dida-task-title';
-      tx.textContent = t.title;
-      li.appendChild(tx);
-      // 点击任务项 → 标记为已完成（仅当有 projectId 可完成；请求中防重复点击）
-      li.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        if (li.classList.contains('completing')) return;
-        li.classList.add('completing');
-        completeTask(t);
-      });
-      return li;
-    };
-    // 单列：组标题 + 任务列表 + 超出提示（折叠时每列各自显示「还有 N 项 ▼」，点击展开全部）
-    // opts.nowLine：定时列专用——按当前时刻把任务切成「已过（线上）」/「未到（线下）」两段，
-    // 中间插一条细线表示"现在"（线以上 = 本应在当前时刻之前完成的任务，线以下 = 还没到）
-    const renderColumn = (tasks, title, opts) => {
-      if (!tasks.length) return;
-      const withLine = !!(opts && opts.nowLine);
-      const col = document.createElement('div');
-      col.className = 'dida-task-col';
-      const h = document.createElement('div');
-      h.className = 'dida-group-title';
-      h.textContent = title;
-      col.appendChild(h);
-
-      // 分段：定时列 = [已过任务][现在线][未到任务]，其余列整体一段
-      let hidden = 0;
-      let segments;
-      if (withLine) {
-        const now = new Date();
-        const nowStr = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
-        const past = tasks.filter(t => t.time && t.time <= nowStr);
-        const future = tasks.filter(t => !t.time || t.time > nowStr);
-        segments = [{ tasks: past }, { now: nowStr }, { tasks: future }];
-        if (!didaTodayExpanded) {
-          hidden = Math.max(0, past.length - MAX_SHOW) + Math.max(0, future.length - MAX_SHOW);
-        }
-      } else {
-        segments = [{ tasks }];
-        if (!didaTodayExpanded && tasks.length > MAX_SHOW) hidden = tasks.length - MAX_SHOW;
-      }
-
-      for (const seg of segments) {
-        if (seg.now !== undefined) {
-          const line = document.createElement('div');
-          line.className = 'dida-now-line';
-          line.textContent = '现在 ' + seg.now;
-          col.appendChild(line);
-          continue;
-        }
-        const ul = document.createElement('ul');
-        ul.className = 'dida-task-sublist';
-        (didaTodayExpanded ? seg.tasks : seg.tasks.slice(0, MAX_SHOW)).forEach(t => ul.appendChild(taskItem(t)));
-        col.appendChild(ul);
-      }
-
-      // 折叠时才显示各列的「还有 N 项」；展开时由卡片底部统一的「收起」负责
-      if (!didaTodayExpanded && hidden > 0) {
-        const more = document.createElement('div');
-        more.className = 'dida-more';
-        more.title = '点击展开全部';
-        more.textContent = '还有 ' + hidden + ' 项 ▼';
-        more.addEventListener('click', (ev) => {
-          ev.stopPropagation();
-          didaTodayExpanded = true;
-          renderGrid();
-        });
-        col.appendChild(more);
-      }
-      listEl.appendChild(col);
-    };
-
-    renderColumn(allDayTasks, '全天');
-    renderColumn(timedTasks, '定时', { nowLine: true });
-    // 展开后：卡片中央（两列下方横跨）显示唯一的「收起 ▲」
-    if (didaTodayExpanded) {
-      const bar = document.createElement('div');
-      bar.className = 'dida-collapse';
-      bar.title = '点击收起';
-      bar.textContent = '收起 ▲';
-      bar.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        didaTodayExpanded = false;
-        renderGrid();
-      });
-      listEl.appendChild(bar);
-    }
-  }
-
-  // ---- 点击完成任务：调服务端 MCP complete_task，成功后本地移除并重新渲染 ----
-  async function completeTask(t) {
-    if (!t || !t.projectId || !t.id) {
-      showToast('该任务缺少项目信息，无法完成', 'err');
-      return;
-    }
-    try {
-      const res = await fetchJSON('/api/dida-complete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId: t.projectId, taskId: t.id }),
-      });
-      if (!res.ok) throw new Error(res.error || '完成失败');
-      // 本地移除（不等 5 分钟轮询），立即反映
-      if (didaToday && Array.isArray(didaToday.tasks)) {
-        didaToday.tasks = didaToday.tasks.filter(x => x.id !== t.id);
-        didaToday.count = didaToday.tasks.length;
-      }
-      showToast('已完成: ' + t.title);
-      renderGrid();
-    } catch (e) {
-      showToast('完成失败: ' + e.message, 'err');
-      reportClientError('completeTask: ' + e.message);
-    }
-  }
-
-  // ---- 今日专注时长渲染（独立卡：总时长大字，精确到秒） ----
-  function renderDidaFocus(valueEl) {
-    if (!didaFocus) { valueEl.textContent = '—'; return; }
-    if (!didaFocus.ok) { valueEl.className = 'stat-value err'; valueEl.textContent = '获取失败'; return; }
-    valueEl.className = 'stat-value';
-    const totalSec = Math.round(didaFocus.totalMs / 1000);
-    const h = Math.floor(totalSec / 3600);
-    const m = Math.floor((totalSec % 3600) / 60);
-    const s = totalSec % 60;
-    const parts = [];
-    if (h) parts.push(h + 'h');
-    if (m) parts.push(m + 'm');
-    if (s || !parts.length) parts.push(s + 's');
-    valueEl.textContent = parts.join(' ');
-  }
-
-  // ---- DSH 对话状态卡渲染（v0.6.2 二态可见：working / pending；移除 unread） ----
-  // 状态语义（与 server.js fetchDshSessions 对齐；DSH 3080 session.list 只暴露这些字段）：
-  //   working  → 旋转琥珀圆点，每会话一个（最多 DSH_DOTS_MAX，超出 +N）
-  //   pending  → 1 个琥珀静态圆点（不旋转）：plan.pending=true + !running（极少见）
-  //   其它（truly idle / offline / blank / error） → 整段 .dsh-status 隐藏，卡片只剩标题
-  // 历史：v0.6 三态（working/unread/pending）→ v0.6.2 移除 unread（用户反馈"agent 之前有产出但你没看的"不实用，移除）
-  // 设计：v0.5 模仿 DSH 会话栏圆点语言 → v0.5.1/2 收紧 meta / 隐藏 idle → v0.6 → v0.6.2 砍掉 unread
-  // 技术限制：session.list 不暴露 ask_user_question / session.error → 这两类不可见
-  const DSH_DOTS_MAX = 6;  // working 圆点上限
-  function sessionLabel(a) {
-    return (a && (a.title || a.cwd || (a.sessionId ? a.sessionId.slice(0, 8) : ''))) || '';
-  }
-  function appendDot(dotsEl, className, title) {
-    const dot = document.createElement('span');
-    dot.className = className;
-    if (title) dot.title = title;
-    dotsEl.appendChild(dot);
-  }
-  function renderDshSessionsCard(refs) {
-    if (!refs || !refs.status || !refs.dots || !refs.meta) return;
-    const statusEl = refs.status;
-    const dotsEl = refs.dots;
-    const metaEl = refs.meta;
-    // 清空旧圆点（keyed 渲染复用 DOM，必须清；否则多次轮询后圆点累加）
-    while (dotsEl.firstChild) dotsEl.removeChild(dotsEl.firstChild);
-    metaEl.textContent = '';
-    metaEl.title = '';
-    if (!dshSessions) {
-      statusEl.style.display = 'none';  // 首轮未到：与 truly idle 同处理
-      return;
-    }
-    const running = dshSessions.running || 0;
-    const pendingCount = dshSessions.pendingCount || 0;
-    const hasSignal = running > 0 || pendingCount > 0;
-    if (!hasSignal) {
-      // truly idle / offline / blank / error：无任何活动态信号 → 整段隐藏
-      statusEl.style.display = 'none';
-      return;
-    }
-    // 有信号：整段显示
-    statusEl.style.display = '';
-    // 1) working 圆点（旋转琥珀，每会话一个，上限 DSH_DOTS_MAX）
-    const active = dshSessions.active || [];
-    const visibleWorking = Math.min(active.length, DSH_DOTS_MAX);
-    for (let i = 0; i < visibleWorking; i++) {
-      appendDot(dotsEl, 'dsh-dot working', sessionLabel(active[i]) || null);
-    }
-    if (active.length > DSH_DOTS_MAX) {
-      const more = document.createElement('span');
-      more.className = 'dsh-dot-count';
-      more.textContent = '+' + (active.length - DSH_DOTS_MAX);
-      more.title = active.slice(DSH_DOTS_MAX).map(sessionLabel).filter(Boolean).join('、');
-      dotsEl.appendChild(more);
-    }
-    // 2) pending 单圆点（琥珀静态，不旋转；与 working 区分）
-    if (pendingCount > 0) {
-      const pendingList = dshSessions.pending || [];
-      const titleParts = pendingList.map(sessionLabel).filter(Boolean);
-      const title = (titleParts.length ? titleParts.slice(0, 5).join('、') + (titleParts.length > 5 ? '…' : '') : pendingCount + ' 个待确认');
-      appendDot(dotsEl, 'dsh-dot pending', title);
-    }
-    // 3) meta：聚合各状态计数（"N 个工作 · P 个待确认"）
-    const parts = [];
-    if (running > 0) parts.push(running + ' 个工作');
-    if (pendingCount > 0) parts.push(pendingCount + ' 个待确认');
-    metaEl.textContent = parts.join(' · ');
-    // meta hover 聚合 active + pending 标题
-    const allTitles = []
-      .concat(active.map(sessionLabel))
-      .concat((dshSessions.pending || []).map(sessionLabel))
-      .filter(Boolean);
-    metaEl.title = allTitles.slice(0, 10).join('、') + (allTitles.length > 10 ? '…' : '');
-  }
-
-  // ---- 模式 multi-tag 组件已抽到 wb-mode.js（顶部 const renderModeTags = WB.renderModeTags 引入） ----
-
-  // ---- RSS 信息卡渲染（每个源一个小标题 + 最新条目链接列表） ----
-  function fmtRssDate(ts) {
-    if (!ts) return '';
-    const d = new Date(ts);
-    if (isNaN(d.getTime())) return '';
-    return (d.getMonth() + 1) + '-' + String(d.getDate()).padStart(2, '0');
-  }
-
-  function renderRssList(listEl) {
-    listEl.innerHTML = '';
-    if (!rssData) {
-      const p = document.createElement('div');
-      p.className = 'rss-item rss-empty';
-      p.textContent = '读取中...';
-      listEl.appendChild(p);
-      return;
-    }
-    // 按 mode 过滤（feedsList 含 mode 字段，rssData.feeds 含抓取后的内容）——
-    // 服务端 /api/rss 不感知 mode（currentMode 是客户端态），前端按 feedsList 列表过滤
-    const modeMap = new Map((feedsList || []).map((f) => [f.id, f.mode]));
-    const visibleFeeds = (rssData.feeds || []).filter((f) => modeMatches(modeMap.get(f.id)));
-    if (!visibleFeeds.length) {
-      const p = document.createElement('div');
-      p.className = 'rss-item rss-empty';
-      p.textContent = (rssData.feeds || []).length > 0 ? '当前模式下没有订阅源' : '暂无订阅源：样式 → RSS 订阅 中添加';
-      listEl.appendChild(p);
-      return;
-    }
-    for (const f of visibleFeeds) {
-      const h = document.createElement('div');
-      h.className = 'rss-feed-title' + (f.ok === false ? ' err' : '') + (f.stale ? ' stale' : '');
-      h.textContent = f.name || f.feedTitle || f.url;
-      h.title = f.url + (f.ok === false ? '\n获取失败: ' + (f.error || '') : (f.stale ? '\n本次抓取失败，显示上次缓存内容' : ''));
-      if (f.url) {
-        h.addEventListener('click', () => openExternal(f.url));
-        h.style.cursor = 'pointer';
-      }
-      listEl.appendChild(h);
-      if (f.ok === false) {
-        const p = document.createElement('div');
-        p.className = 'rss-item rss-empty';
-        p.textContent = '获取失败: ' + (f.error || '未知错误');
-        p.title = f.error || '';
-        listEl.appendChild(p);
-        continue;
-      }
-      for (const it of (f.items || [])) {
-        const a = document.createElement('a');
-        a.className = 'rss-item';
-        a.href = it.link || '#';
-        a.target = '_blank';
-        a.rel = 'noopener';
-        a.draggable = false;
-        const t = document.createElement('span');
-        t.className = 'rss-item-title';
-        t.textContent = it.title;
-        a.appendChild(t);
-        const d = document.createElement('span');
-        d.className = 'rss-item-date';
-        d.textContent = fmtRssDate(it.ts);
-        a.appendChild(d);
-        a.title = it.title + (it.link ? '\n' + it.link : '');
-        listEl.appendChild(a);
-      }
-    }
-  }
-
-  // ---- 刷新 RSS / DSH 对话状态已抽到 wb-state.js（顶部 const refreshRss / refreshDshSessions 引入） ----
-
-  // ---- 全量渲染（keyed：复用节点，按序 append 实现排序） ----
-  function renderGrid() {
-    if (dragActive) return; // 拖拽中跳过，避免重排打断手势
-    const order = getOrder();
-    const layout = document.body.dataset.layout || 'grid';
-    const sideCol = document.getElementById('side-col');
-    for (const id of order) {
-      if (SYS_CARDS[id]) {
-        // 模式过滤：当前模式下的卡才渲染（mode 是用户态，与 dida visible 正交）
-        if (!modeMatches(SYS_CARDS[id].mode)) continue;
-        // RSS 卡按偏好开关显隐（off 时不渲染不占位，等同未安装）
-        if (id === 'sys-rss' && (document.body.dataset.rss || 'on') === 'off') continue;
-        ensureSystemCard(id);
-        renderSystemCard(id);
-      } else {
-        const b = buttons.find(x => x.id === id);
-        // 模式过滤：当前模式下的按钮才渲染（mode 是用户态）
-        if (b && !modeMatches(b.mode)) continue;
-        // dida 卡片按 visible 显隐：未到点 / 今天已点过 → 不渲染（卡片隐藏，次日或到点自动恢复）
-        if (b && b.visible !== false) renderFuncCard(b);
-      }
-    }
-    // split-center 布局：中栏（dida-col）底部放快捷方式启动卡（今日任务固定顶部，CSS order 控制）
-    let shortcutsWrap = null;
-    if (layout === 'split-center') {
-      const dc = document.getElementById('dida-col');
-      if (dc) {
-        shortcutsWrap = dc.querySelector('.dida-shortcuts');
-        if (!shortcutsWrap) {
-          shortcutsWrap = document.createElement('div');
-          shortcutsWrap.className = 'dida-shortcuts';
-          dc.appendChild(shortcutsWrap);
-        }
-      }
-    }
-    for (const id of order) {
-      const rec = cardCache.get(id);
-      if (!rec) continue;
-      // 模式过滤：从 DOM 移除（保留 cardCache 与顺序位，切换模式时原地回来）
-      if (SYS_CARDS[id] && !modeMatches(SYS_CARDS[id].mode)) {
-        rec.el.remove();
-        continue;
-      }
-      const b = buttons.find(x => x.id === id);
-      if (b && !modeMatches(b.mode)) {
-        rec.el.remove();
-        continue;
-      }
-      // 隐藏不可见的 dida 卡片：从 DOM 移除（保留 cardCache 与顺序位，恢复可见时原地回来）
-      const b2 = buttons.find(x => x.id === id);
-      if (b2 && b2.kind === 'dida' && b2.visible === false) {
-        rec.el.remove();
-        continue;
-      }
-      // RSS 卡偏好关闭：从 DOM 移除（保留缓存与顺序位，重新打开原地回来）
-      if (id === 'sys-rss' && (document.body.dataset.rss || 'on') === 'off') {
-        rec.el.remove();
-        continue;
-      }
-      // 顶栏搜索过滤：有搜索词时隐藏不匹配卡片（仅 display 隐藏不卸载，清空即恢复；
-      // 不可见卡（上两行 continue）不参与过滤）
-      rec.el.style.display = (!searchQ || cardMatchesSearch(id)) ? '' : 'none';
-      // 双栏仪表盘（split）三栏分配：
-      //   dida-col（左）= 滴答今日任务卡；side-col（右）= 其余信息卡；buttons-grid（中）= 功能卡
-      //   split-center：dida-col（中）= 今日任务（顶）+ 快捷方式启动卡（底）；buttons-grid（左）= 其余功能卡
-      let target = grid;
-      if (layout === 'split' || layout === 'split-center') {
-        const didaCol = document.getElementById('dida-col');
-        if (id === 'sys-dida-today' && didaCol) target = didaCol;
-        else if (SYS_CARDS[id] && sideCol) target = sideCol;
-        else if (layout === 'split-center' && b && b.command && !b.toggle && !b.kind && shortcutsWrap) target = shortcutsWrap;
-      }
-      target.appendChild(rec.el);
-    }
-    // 清理失效卡片（按钮被移除等）
-    for (const [id, rec] of cardCache) {
-      if (!order.includes(id)) {
-        rec.el.remove();
-        cardCache.delete(id);
-      }
-    }
-    // Bento 网格瀑布流：按卡片实际高度设置 span 行，dense 自动填充矮卡下方空隙
-    applyMasonry();
-  }
-
-  // ---- Bento 网格瀑布流 ----
-  // CSS 已设 body[data-layout="grid"] .buttons-grid { grid-auto-rows: 10px }。
-  // 行高单位 10px + gap 16px：卡片 span N 行 = N*10 + (N-1)*16 ≥ 卡高 ⟺ N ≥ (卡高+16)/26。
-  // 同一同步块内：先量 auto 行高下的自然高度，再设固定行高 + span，浏览器只渲染最终结果。
-  const MASONRY_ROW = 10;
-  const MASONRY_GAP = 16;
-  function applyMasonry() {
-    const layout = document.body.dataset.layout || 'grid';
-    if (layout !== 'grid') return;
-    const cards = [...grid.querySelectorAll(':scope > .card')];
-    if (!cards.length) return;
-    grid.style.gridAutoRows = 'auto';
-    const heights = cards.map(c => c.getBoundingClientRect().height);
-    grid.style.gridAutoRows = MASONRY_ROW + 'px';
-    cards.forEach((c, i) => {
-      const span = Math.max(1, Math.ceil((heights[i] + MASONRY_GAP) / (MASONRY_ROW + MASONRY_GAP)));
-      c.style.gridRowEnd = 'span ' + span;
-    });
-  }
 
   // ---- 拖拽排序（指针事件实现：仅按住 ⠿ 手柄拖动换位；卡片其他位置点击即执行） ----
   // 不用 HTML5 draggable：它会吞掉 click 事件，导致"点了没反应"。
@@ -1154,7 +94,7 @@
     pDrag = null;
     dragActive = false;
     document.body.style.userSelect = '';
-    renderGrid(); // 按当前顺序恢复卡片到原位
+    WB.renderGrid(); // 按当前顺序恢复卡片到原位
   }
 
   document.addEventListener('mousedown', (e) => {
@@ -1289,7 +229,7 @@
     if (busy[b.id]) return;
     busy[b.id] = true;
     try {
-      renderGrid(); // 若渲染抛错，finally 仍会清除 busy，按钮不会卡死在"执行中..."
+      if (WB.renderGrid) WB.renderGrid(); // 若渲染抛错，finally 仍会清除 busy，按钮不会卡死在"执行中..."
       if (b.kind === 'push') {
         const result = await fetchJSON('/api/push', { method: 'POST' });
         if (result.ok) {
@@ -1651,8 +591,8 @@
 
   function applySearch(value) {
     searchQ = (value || '').trim().toLowerCase();
-    renderSidebarBookmarks();
-    renderGrid();
+    WB.renderSidebarBookmarks();
+    WB.renderGrid();
   }
 
   if (searchInput) {
@@ -1731,7 +671,7 @@
     document.querySelectorAll('.sp-opt[data-layout-opt]').forEach(el => {
       el.classList.toggle('active', el.dataset.layoutOpt === layout);
     });
-    renderGrid(); // 布局/开关变化时重渲染（keyed 复用，开销极小）
+    WB.renderGrid(); // 布局/开关变化时重渲染（keyed 复用，开销极小）
     // RSS 卡从关到开且尚无数据时立即拉取（开关切换即时出内容）
     if ((document.body.dataset.rss || 'on') === 'on' && !rssData) refreshRss();
   }
@@ -1749,13 +689,13 @@
     // 同步已有卡片的 drag-hint 显隐（keyed 缓存复用 DOM，初次渲染后不会自动重渲）
     syncDragHintsForReadonly();
     // 立即重渲侧栏 / 卡片墙 / RSS（按 mode 过滤），不等 10 秒轮询
-    renderSidebarBookmarks();
-    renderSystemCard('sys-bookmarks');
+    WB.renderSidebarBookmarks();
+    WB.renderSystemCard('sys-bookmarks');
     renderRssForReRender();
     // 同步卡片墙书签 add 按钮显隐（keyed 缓存初渲决定，setMode 不破坏）
     refreshAllCardAddBtns();
     // RSS 卡片若已渲染，拉一次新数据（缓存内的 rssData 可能不含新加的源 / 切换后的源）
-    const rssHit = cardCache.get('sys-rss');
+    const rssHit = WB.cardCache && WB.cardCache.get('sys-rss');
     if (rssHit && (document.body.dataset.rss || 'on') === 'on') {
       refreshRss();
     }
@@ -1766,10 +706,10 @@
 
   // 切换模式后重新触发 RSS 卡片渲染（keyed 缓存复用 DOM，renderGrid 才会重渲染内层）
   function renderRssForReRender() {
-    const hit = cardCache.get('sys-rss');
+    const hit = WB.cardCache && WB.cardCache.get('sys-rss');
     if (!hit) return;
     const listEl = hit.refs.list;
-    if (listEl) renderRssList(listEl);
+    if (listEl) WB.renderRssList(listEl);
   }
 
   // 同步卡片墙书签 / RSS 卡的 add 按钮显隐（已渲染的按钮不会被 readonly 状态回流影响）
@@ -2372,7 +1312,7 @@
   // 持久化：刷新按钮/书签/RSS 后重新拉取并重渲染（refreshButtons/refreshBookmarks/refreshFeedsData + refreshSysCards 都在 init 末轮询）
   // 注：手动配置的普通按钮只能看到，不能在这里编辑（buttons.json 是配置文件，没 UI 入口）
   function initModeManager() {
-    renderModeManager();
+    WB.renderModeManager();
   }
 
   function renderModeManager() {
@@ -2590,8 +1530,8 @@
         sysCardStates[id] = res.card ? res.card.mode : newMode;
         if (SYS_CARDS[id]) SYS_CARDS[id].mode = sysCardStates[id];
         showToast('已更新系统卡模式', 'ok');
-        renderGrid();       // 立即重新过滤（modeMatches(SYS_CARDS[id].mode)）
-        renderModeManager(); // 模式管理区本身也要刷新（其它行不变，仅本行 active 状态）
+        WB.renderGrid();       // 立即重新过滤（modeMatches(SYS_CARDS[id].mode)）
+        WB.renderModeManager(); // 模式管理区本身也要刷新（其它行不变，仅本行 active 状态）
       } else {
         showToast('更新失败: ' + (res.error || ''), 'err');
       }
@@ -2602,24 +1542,14 @@
 
   // ---- refreshSysCards 已抽到 wb-state.js（顶部 const refreshSysCards 引入） ----
 
-  // ---- 跨模块桥接：把渲染 / 工具函数挂到 WB（wb-state.js 的 refresh* 运行时调用） ----
-  // app.js 中仍保留函数本体；这里只做"挂载到 WB"以让 wb-state.js 的 if (WB.xxx) 守护调用能命中
-  // 待 wb-render.js / wb-action.js / wb-bookmarks.js / wb-settings.js 拆出后，这些函数搬走，本块删
-  WB.renderGrid = renderGrid;
-  WB.renderSystemCard = renderSystemCard;
-  WB.renderFuncCard = renderFuncCard;
-  WB.renderShortcutList = renderShortcutList;
-  WB.renderModeManager = renderModeManager;
-  WB.renderSidebarBookmarks = renderSidebarBookmarks;
-  WB.renderFeedsPanel = renderFeedsPanel;
-  WB.applyMasonry = applyMasonry;
-  WB.renderRssList = renderRssList;
-  WB.showBookmarkLoadFailedBanner = showBookmarkLoadFailedBanner;
+  // ---- 跨模块桥接：把工具 / UI 函数挂到 WB（wb-state.js / wb-render.js 的 refresh* 与 render* 运行时调用） ----
+  // app.js 中仍保留函数本体；这里只做"挂载到 WB"以让其他模块的 if (WB.xxx) 守护调用能命中
+  // 待 wb-action.js / wb-bookmarks.js / wb-settings.js 拆出后，这些函数搬走，本块缩为最小集
   WB.showToast = showToast;
   WB.openExternal = openExternal;
-  WB.runButton = runButton;
-  WB.completeTask = completeTask;
-  WB.faviconImg = faviconImg;
+  if (typeof runButton === 'function') WB.runButton = runButton;
+  if (typeof completeTask === 'function') WB.completeTask = completeTask;
+  if (typeof faviconImg === 'function') WB.faviconImg = faviconImg;
   WB.applyStyle = applyStyle;
   WB.setMode = setMode;
   WB.setStyle = setStyle;
@@ -2627,7 +1557,11 @@
   WB.syncDragHintsForReadonly = syncDragHintsForReadonly;
   WB.refreshAllCardAddBtns = refreshAllCardAddBtns;
   WB.renderRssForReRender = renderRssForReRender;
-  WB.bindCardClick = bindCardClick;
+  WB.showBookmarkLoadFailedBanner = showBookmarkLoadFailedBanner;
+  WB.renderShortcutList = renderShortcutList;
+  WB.renderModeManager = renderModeManager;
+  WB.renderSidebarBookmarks = renderSidebarBookmarks;
+  WB.renderFeedsPanel = renderFeedsPanel;
 
   // ---- 初始化 ----
   async function init() {
@@ -2649,7 +1583,7 @@
     // 测试钩子：URL 含 ?mmx=1 时暴露 minimaxData setter，供 headless 浏览器模拟警示场景
     // （生产环境无副作用；测试时用 ?mmx=1# 或 ?mmx=1 启动）
     if (location.search.indexOf('mmx=1') >= 0) {
-      window.__setMmx = (d) => { minimaxData = d; renderSystemCard('sys-minimax'); };
+      window.__setMmx = (d) => { minimaxData = d; WB.renderSystemCard('sys-minimax'); };
     }
     try {
       const cfg = await fetchJSON('/api/buttons');
@@ -2678,12 +1612,12 @@
     setInterval(refreshRss, 600000); // RSS 源 10 分钟（服务端另有 15 分钟缓存兜底）
     setInterval(refreshDshSessions, 5000); // DSH 对话状态：5 秒一次（状态变化即时可见）
     // 现在时刻线每分钟刷新：任务随当前时间在「已过/未到」间滑动，线的位置与文案要跟着走
-    setInterval(() => { renderSystemCard('sys-dida-today'); applyMasonry(); }, 60000);
+    setInterval(() => { WB.renderSystemCard('sys-dida-today'); WB.applyMasonry(); }, 60000);
     setInterval(updateRateBadge, 60000);
     // 窗口尺寸变化时重算瀑布流 span（响应式断点改变列数 → 卡高变化）
     window.addEventListener('resize', () => {
       clearTimeout(window.__masonryResize);
-      window.__masonryResize = setTimeout(() => renderGrid(), 200);
+      window.__masonryResize = setTimeout(() => WB.renderGrid(), 200);
     });
   }
 
