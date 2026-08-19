@@ -1,12 +1,21 @@
 // 工作台前端逻辑：Bento 卡片墙渲染、轮询状态与日志、拖拽排序、执行按钮
+// v1.2 拆分：核心工具 / 元数据已抽到 wb-core.js（本文件依赖 window.WB.grid / SYS_CARDS / fetchJSON 等）
 (function () {
   'use strict';
 
-  const grid = document.getElementById('buttons-grid');
-  const logsList = document.getElementById('logs-list');
-  const dot = document.getElementById('server-dot');
-  const statusText = document.getElementById('server-status-text');
-  const titleEl = document.getElementById('workbench-title');
+  // 共享引用从 wb-core.js 注入的 WB 命名空间读取（详见 wb-core.js）
+  const grid = WB.grid;
+  const logsList = WB.logsList;
+  const dot = WB.dot;
+  const statusText = WB.statusText;
+  const titleEl = WB.titleEl;
+  const SYS_CARDS = WB.SYS_CARDS;
+  const CARD_ICONS = WB.CARD_ICONS;
+  const applyCardIcon = WB.applyCardIcon;
+  const animateValue = WB.animateValue;
+  const setNum = WB.setNum;
+  const fetchJSON = WB.fetchJSON;
+  const reportClientError = WB.reportClientError;
 
   let buttons = [];
   let busy = {};
@@ -41,80 +50,9 @@
   }
   let workbenchOnline = false;
 
-  // ---- 系统信息卡定义（内置，非 buttons.json 按钮） ----
-  const SYS_CARDS = {
-    'sys-balance':   { id: 'sys-balance',   name: 'DeepSeek 余额', size: 'small', kind: 'stat' },
-    'sys-status':    { id: 'sys-status',    name: '系统状态',      size: 'small', kind: 'status' },
-    'sys-dsh-sessions': { id: 'sys-dsh-sessions', name: 'DSH 对话', size: 'small', kind: 'dsh-sessions' },
-    'sys-bookmarks': { id: 'sys-bookmarks', name: '书签',          size: 'small', kind: 'bookmarks' },
-    'sys-dida-today':{ id: 'sys-dida-today', name: '滴答今日任务', size: 'large', kind: 'dida-today' },
-    'sys-dida-focus':{ id: 'sys-dida-focus', name: '滴答专注',     size: 'small', kind: 'stat' },
-    'sys-minimax':   { id: 'sys-minimax',   name: 'MiniMax 套餐',  size: 'wide',  kind: 'minimax' },
-    'sys-rss':       { id: 'sys-rss',       name: 'RSS 订阅',      size: 'wide',  kind: 'rss' },
-  };
-
+  // ---- 系统信息卡定义 / 卡片图标 / 数字滚动动画 已抽到 wb-core.js（顶部 const SYS_CARDS = WB.SYS_CARDS 引入） ----
   // 卡片顺序持久化（localStorage，仅本机浏览器）
   const ORDER_KEY = 'workbench-card-order';
-
-  // ---- 卡片图标（Unicode 字符，随主题色显示，可用开关关闭） ----
-  const CARD_ICONS = {
-    dsh: '⚙',
-    push: '▣',
-    anki: 'A',
-    sm18: 'S',
-    'dida-inbox': '⇩',
-    'dida-plan': '▦',
-    'dida-weekly': '周',
-    'sys-balance': '¥',
-    'sys-status': '∿',
-    'sys-bookmarks': '★',
-    'sys-dida-today': '今',
-    'sys-dida-focus': '⏱',
-    'sys-dsh-sessions': '◉',
-    'sys-minimax': 'Ⓜ',
-    'sys-rss': '≡',
-  };
-
-  // ---- 卡片图标：按钮带 icon 字段（服务端检测 public/icons/<id>.ico 是否存在后返回）
-  // 则显示软件自身图标 <img>，否则回退 CARD_ICONS 字符。 ----
-  function applyCardIcon(iconEl, def) {
-    if (!iconEl) return;
-    const src = def && def.icon;
-    if (src) {
-      iconEl.textContent = '';
-      let img = iconEl.querySelector('img');
-      if (!img) {
-        img = document.createElement('img');
-        img.alt = '';
-        iconEl.appendChild(img);
-      }
-      img.src = src;
-    } else {
-      iconEl.textContent = (def && CARD_ICONS[def.id]) || '';
-    }
-  }
-
-  // ---- 数字滚动动画（ease-out cubic，600ms） ----
-  function animateValue(el, from, to, fmt, duration = 600) {
-    const start = performance.now();
-    const tick = (now) => {
-      const t = Math.min(1, (now - start) / duration);
-      const eased = 1 - Math.pow(1 - t, 3);
-      el.textContent = fmt(from + (to - from) * eased);
-      if (t < 1) requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-  }
-
-  function setNum(el, to, animate, fmt) {
-    const prev = el._last;
-    el._last = to;
-    if (animate && typeof prev === 'number' && prev !== to) {
-      animateValue(el, prev, to, fmt);
-    } else {
-      el.textContent = fmt(to);
-    }
-  }
 
   // ---- DeepSeek 峰谷定价：高峰 9-12 / 14-18（北京时间），其余空闲半价 ----
   function isPeakHour(d) {
@@ -164,29 +102,7 @@
     }
   }
 
-  // ---- 数据获取 ----
-  async function fetchJSON(url, options) {
-    const r = await fetch(url, options);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    return r.json();
-  }
-
-  // ---- 客户端错误上报（排查"点了没反应"：页面 JS 错误实时发到服务端日志） ----
-  function reportClientError(msg) {
-    try {
-      fetch('/api/log-client-error', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ msg: String(msg).slice(0, 500) }),
-      }).catch(() => {});
-    } catch (e) { /* 忽略 */ }
-  }
-  window.addEventListener('error', (e) => {
-    reportClientError((e.message || '未知错误') + ' @' + (e.filename || '') + ':' + (e.lineno || ''));
-  });
-  window.addEventListener('unhandledrejection', (e) => {
-    reportClientError('unhandledrejection: ' + (e.reason && e.reason.message ? e.reason.message : String(e.reason)));
-  });
+  // ---- 数据获取 / 客户端错误上报 已抽到 wb-core.js（顶部 const fetchJSON / reportClientError 引入；全局 error/unhandledrejection 监听也在 wb-core.js） ----
 
   // ---- 顺序管理 ----
   function defaultOrder() {
