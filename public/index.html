@@ -310,9 +310,10 @@
   <div class="drop-overlay-inner">松开鼠标，添加为快捷方式</div>
 </div>
 
-<!-- 工作台前端按依赖顺序加载：核心工具 → 模式系统 → 入口（待续拆 wb-state / wb-render / ...） -->
+<!-- 工作台前端按依赖顺序加载：核心 → 模式 → 状态 → 入口（待续拆 wb-render / wb-action / ...） -->
 <script src="wb-core.js"></script>
 <script src="wb-mode.js"></script>
+<script src="wb-state.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

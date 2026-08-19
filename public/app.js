@@ -18,19 +18,41 @@
   const reportClientError = WB.reportClientError;
   // wb-mode.js 暴露的函数（isReadonlyMode / modeMatches / modeLabel / renderModeTags）由下面"模式系统"块声明 let 后再引入
 
-  let buttons = [];
-  let busy = {};
-  let queueInfo = null;
-  let balanceData = null;
-  let bookmarks = [];
-  let didaToday = null;
-  let didaFocus = null;
-  let minimaxData = null;  // MiniMax Token Plan 额度（/api/minimax-coding-plan）
-  let rssData = null;      // RSS 信息卡数据（/api/rss）
-  let feedsList = [];      // RSS 订阅源列表（设置面板管理，/api/feeds）
-  let dshSessions = null;  // DSH 对话状态聚合（/api/dsh-sessions）：{ status: 'working'|'idle'|'offline'|'error', running, total, active }
-  let sysCardStates = {};  // 系统卡 mode 状态（/api/syscards）：id -> mode（已规范化）。启动后写入 SYS_CARDS[id].mode
-  let searchQ = '';        // 顶栏搜索关键字（已小写；空 = 不过滤）
+  // 状态变量与轮询刷新函数已抽到 wb-state.js（let xxx = WB.xxx 引入本地视图；修改时双写）
+  let buttons = WB.buttons;
+  let busy = WB.busy;
+  let queueInfo = WB.queueInfo;
+  let balanceData = WB.balanceData;
+  let bookmarks = WB.bookmarks;
+  let didaToday = WB.didaToday;
+  let didaFocus = WB.didaFocus;
+  let minimaxData = WB.minimaxData;
+  let rssData = WB.rssData;
+  let feedsList = WB.feedsList;
+  let dshSessions = WB.dshSessions;
+  let sysCardStates = WB.sysCardStates;
+  let searchQ = WB.searchQ;
+  let workbenchOnline = WB.workbenchOnline;
+  let loadedVersion = WB.loadedVersion;
+  let versionChecked = WB.versionChecked;
+  // 价格时段（从 wb-state.js 引入）
+  const isPeakHour = WB.isPeakHour;
+  const nextPeakStart = WB.nextPeakStart;
+  const updateRateBadge = WB.updateRateBadge;
+  // 刷新函数（从 wb-state.js 引入）
+  const refreshButtons = WB.refreshButtons;
+  const refreshQueue = WB.refreshQueue;
+  const refreshBalance = WB.refreshBalance;
+  const refreshDidaToday = WB.refreshDidaToday;
+  const refreshDidaFocus = WB.refreshDidaFocus;
+  const refreshMiniMax = WB.refreshMiniMax;
+  const refreshLogs = WB.refreshLogs;
+  const refreshRss = WB.refreshRss;
+  const refreshDshSessions = WB.refreshDshSessions;
+  const refreshBookmarks = WB.refreshBookmarks;
+  const refreshFeedsData = WB.refreshFeedsData;
+  const refreshSysCards = WB.refreshSysCards;
+
   // 模式系统已抽到 wb-mode.js（顶部 const isReadonlyMode / modeMatches / modeLabel / renderModeTags 引入）
   // 共享状态变量从 WB 初始化（首次加载 wb-mode.js 时已设默认）；每次修改同步写回 WB
   let MODES = WB.MODES;
@@ -40,61 +62,13 @@
   const modeMatches = WB.modeMatches;
   const modeLabel = WB.modeLabel;
   const renderModeTags = WB.renderModeTags;
-  let workbenchOnline = false;
 
   // ---- 系统信息卡定义 / 卡片图标 / 数字滚动动画 已抽到 wb-core.js（顶部 const SYS_CARDS = WB.SYS_CARDS 引入） ----
   // 卡片顺序持久化（localStorage，仅本机浏览器）
   const ORDER_KEY = 'workbench-card-order';
 
-  // ---- DeepSeek 峰谷定价：高峰 9-12 / 14-18（北京时间），其余空闲半价 ----
-  function isPeakHour(d) {
-    const h = d.getHours();
-    return (h >= 9 && h < 12) || (h >= 14 && h < 18);
-  }
-
-  // 下一个高峰开始时间（今天 9:00 / 14:00；都过了则明天 9:00）
-  function nextPeakStart(now) {
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const at = (hh) => { const t = new Date(today); t.setHours(hh, 0, 0, 0); return t; };
-    for (const s of [at(9), at(14)]) if (s > now) return s;
-    const t = at(9);
-    t.setDate(t.getDate() + 1);
-    return t;
-  }
-
-  function updateRateBadge() {
-    const el = document.getElementById('rate-badge');
-    if (!el) return;
-    const now = new Date();
-    if (isPeakHour(now)) {
-      const endH = now.getHours() < 12 ? 12 : 18;
-      const end = new Date(now);
-      end.setHours(endH, 0, 0, 0);
-      const remMin = Math.max(0, Math.round((end - now) / 60000));
-      const rh = Math.floor(remMin / 60);
-      const rm = remMin % 60;
-      el.textContent = '高峰价 · 剩余 ' + (rh > 0 ? rh + ' 小时 ' : '') + rm + ' 分';
-      el.className = 'rate-badge peak';
-      el.title = '高峰时段 9-12 / 14-18（北京时间），费用为半价时段 2 倍';
-    } else {
-      const next = nextPeakStart(now);
-      const remMin = Math.ceil((next - now) / 60000);
-      if (remMin <= 10) {
-        // 高峰前 10 分钟提醒
-        const hh = next.getHours();
-        const atStr = (hh < 12 ? '上午 ' + hh : '下午 ' + (hh - 12)) + ' 点';
-        el.textContent = '即将高峰 · ' + remMin + ' 分钟后';
-        el.className = 'rate-badge soon';
-        el.title = '高峰将于 ' + atStr + ' 开始（9-12 / 14-18 北京时间），费用翻倍';
-      } else {
-        el.textContent = '空闲价 · 半价';
-        el.className = 'rate-badge idle';
-        el.title = '空闲时段半价；高峰 9-12 / 14-18（北京时间）';
-      }
-    }
-  }
-
   // ---- 数据获取 / 客户端错误上报 已抽到 wb-core.js（顶部 const fetchJSON / reportClientError 引入；全局 error/unhandledrejection 监听也在 wb-core.js） ----
+  // ---- DeepSeek 峰谷定价 / 全部 refresh* 函数已抽到 wb-state.js（顶部 const 引入） ----
 
   // ---- 顺序管理 ----
   function defaultOrder() {
@@ -1047,29 +1021,7 @@
     }
   }
 
-  // ---- 刷新 RSS 数据（偏好关闭时不抓取；服务端 15 分钟缓存兜底） ----
-  async function refreshRss() {
-    if ((document.body.dataset.rss || 'on') === 'off') return;
-    try {
-      rssData = await fetchJSON('/api/rss');
-    } catch (e) {
-      rssData = { ok: false, error: String(e && e.message || e) };
-    }
-    renderGrid();
-  }
-
-  // ---- DSH 对话状态轮询（feedback 2：state 变化在卡片里"亮"） ----
-  // 5 秒一次（与 push 卡片同款节奏，状态有变化即可见）。
-  // 失败时不 renderGrid（避免抖动），只更新全局状态 + 重渲当前卡片（如果已渲染）。
-  async function refreshDshSessions() {
-    try {
-      dshSessions = await fetchJSON('/api/dsh-sessions');
-    } catch (e) {
-      dshSessions = { ok: false, status: 'error', error: String(e && e.message || e), running: 0, total: 0, active: [] };
-    }
-    // 仅触发该卡片的重渲（不影响其它卡片）
-    renderSystemCard('sys-dsh-sessions');
-  }
+  // ---- 刷新 RSS / DSH 对话状态已抽到 wb-state.js（顶部 const refreshRss / refreshDshSessions 引入） ----
 
   // ---- 全量渲染（keyed：复用节点，按序 append 实现排序） ----
   function renderGrid() {
@@ -1384,162 +1336,7 @@
     }
   }
 
-  // ---- 刷新按钮状态 ----
-  let loadedVersion = null;
-  let versionChecked = false;
-
-  async function refreshButtons() {
-    try {
-      const data = await fetchJSON('/api/buttons');
-      buttons = data.buttons || [];
-      workbenchOnline = true;
-      dot.className = 'dot on';
-      statusText.textContent = '工作台服务正常';
-
-      // 版本自检：服务端返回前端文件哈希。本页加载后若发现版本变了，
-      // 说明页面代码已更新（用户可能停在旧标签页），自动刷新拉取新 JS。
-      // 这是"我改了代码但点了没反应"这类旧页面问题的自动防线。
-      if (data.version && data.version !== 'unknown') {
-        if (!versionChecked) {
-          loadedVersion = data.version;
-          versionChecked = true;
-        } else if (data.version !== loadedVersion) {
-          showToast('检测到页面更新，正在自动刷新...', 'warn');
-          setTimeout(() => location.reload(), 800);
-          return;
-        }
-      }
-    } catch (e) {
-      workbenchOnline = false;
-      dot.className = 'dot off';
-      statusText.textContent = '无法连接工作台服务';
-    }
-    renderGrid();
-    renderShortcutList(); // 快捷方式管理列表（设置面板）随按钮数据刷新
-    renderModeManager(); // v5 feedback 3：模式管理区跟随数据刷新
-  }
-
-  // ---- 刷新队列条数 ----
-  async function refreshQueue() {
-    try {
-      queueInfo = await fetchJSON('/api/queue');
-    } catch (e) {
-      queueInfo = null;
-    }
-    renderGrid();
-  }
-
-  // ---- 刷新余额 ----
-  async function refreshBalance() {
-    try {
-      balanceData = await fetchJSON('/api/balance');
-    } catch (e) {
-      balanceData = { ok: false, error: '无法获取' };
-    }
-    renderGrid();
-  }
-
-  // ---- 刷新滴答今日任务 ----
-  // 历史：曾因 fetch 永不返回（浏览器扩展 / Service Worker / 网络层死锁）导致
-  // didaToday 永远为 null、卡片无限显示"读取中..."。修复：10 秒 AbortController 超时兜底，
-  // 失败时打 console.warn + 具体错误信息（不再干瘪显示"无法获取"）。
-  async function refreshDidaToday() {
-    console.log('[dida-today] fetch /api/dida-today');
-    const controller = new AbortController();
-    const tid = setTimeout(() => controller.abort(), 10000);
-    try {
-      didaToday = await fetchJSON('/api/dida-today', { signal: controller.signal });
-      console.log('[dida-today] ok, count=' + (didaToday && didaToday.count));
-    } catch (e) {
-      console.warn('[dida-today] failed: ' + e.message);
-      // AbortError 表明是超时触发的；其余异常透传具体信息便于排查
-      const reason = (e && e.name === 'AbortError') ? '请求超时（10s）' : (e.message || '网络异常');
-      didaToday = { ok: false, error: '获取失败: ' + reason, count: 0, tasks: [] };
-    } finally {
-      clearTimeout(tid);
-    }
-    renderGrid();
-  }
-
-  // ---- 刷新滴答今日专注时长 ----
-  // 同款超时兜底（与 didaToday 共用滴答 MCP，任意一项挂死另一项大概率也挂）
-  async function refreshDidaFocus() {
-    console.log('[dida-focus] fetch /api/dida-focus');
-    const controller = new AbortController();
-    const tid = setTimeout(() => controller.abort(), 10000);
-    try {
-      didaFocus = await fetchJSON('/api/dida-focus', { signal: controller.signal });
-      console.log('[dida-focus] ok, totalMs=' + (didaFocus && didaFocus.totalMs));
-    } catch (e) {
-      console.warn('[dida-focus] failed: ' + e.message);
-      const reason = (e && e.name === 'AbortError') ? '请求超时（10s）' : (e.message || '网络异常');
-      didaFocus = { ok: false, error: '获取失败: ' + reason };
-    } finally {
-      clearTimeout(tid);
-    }
-    renderGrid();
-  }
-
-  // ---- 刷新 MiniMax Token Plan 额度（5 分钟轮询，限额变动较慢） ----
-  async function refreshMiniMax() {
-    try {
-      minimaxData = await fetchJSON('/api/minimax-coding-plan');
-    } catch (e) {
-      minimaxData = { ok: false, error: '无法获取' };
-    }
-    renderGrid();
-  }
-
-  // ---- 刷新日志 ----
-  async function refreshLogs() {
-    try {
-      const data = await fetchJSON('/api/logs');
-      const logs = data.logs || [];
-      logsList.innerHTML = '';
-      if (logs.length === 0) {
-        const li = document.createElement('li');
-        li.className = 'empty';
-        li.textContent = '暂无运行记录';
-        logsList.appendChild(li);
-        return;
-      }
-      for (const log of logs) {
-        const li = document.createElement('li');
-
-        const time = document.createElement('span');
-        time.className = 'time';
-        time.textContent = log.time;
-        li.appendChild(time);
-
-        const name = document.createElement('span');
-        name.className = 'name';
-        name.textContent = log.name;
-        name.title = log.name; // 名称过长被省略号截断时，悬浮显示完整
-        li.appendChild(name);
-
-        const status = document.createElement('span');
-        status.className = 'status';
-        let statusText = '';
-        if (log.status === 'running') {
-          statusText = '执行中';
-          status.classList.add('running');
-        } else if (log.status === 'done') {
-          statusText = log.code === 0 ? '完成' : '失败(退出码 ' + log.code + ')';
-          status.classList.add(log.code === 0 ? 'done-0' : 'done-other');
-        } else {
-          statusText = '出错: ' + (log.error || '');
-          status.classList.add('error');
-        }
-        status.textContent = statusText;
-        status.title = statusText; // 错误信息过长被省略号截断时，悬浮显示完整
-        li.appendChild(status);
-
-        logsList.appendChild(li);
-      }
-    } catch (e) {
-      // 忽略：下次轮询重试
-    }
-  }
+  // ---- 刷新按钮 / 队列 / 余额 / didaToday / didaFocus / MiniMax / logs 已抽到 wb-state.js（顶部 const refreshXxx 引入） ----
 
   // ---- 书签栏折叠/展开 ----
   const collapseBtn = document.getElementById('collapse-btn');
@@ -1575,20 +1372,7 @@
   const bmCancel = document.getElementById('bm-cancel');
   const bmSave = document.getElementById('bm-save');
 
-  async function refreshBookmarks() {
-    try {
-      const data = await fetchJSON('/api/bookmarks');
-      bookmarks = data.bookmarks || [];
-      // 服务端启动加载失败告警（v1 防护：原 bookmarks.json 已备份为 .bak，禁止后续写入）
-      showBookmarkLoadFailedBanner(data.loadFailed);
-    } catch (e) {
-      bookmarks = [];
-      showBookmarkLoadFailedBanner(false);
-    }
-    renderSidebarBookmarks();
-    renderGrid();
-    renderModeManager(); // v5 feedback 3：模式管理区跟随数据刷新
-  }
+  // ---- refreshBookmarks 已抽到 wb-state.js（顶部 const refreshBookmarks 引入） ----
 
   // 启动加载失败横幅（v1 防护：TDZ / 结构损坏时触发；指导用户从 .bak 恢复并重启）
   function showBookmarkLoadFailedBanner(loadFailed) {
@@ -2520,17 +2304,7 @@
   }
 
   // force 为 true 时强制重渲（删源后条目数量可能不变，但内容变了）
-  async function refreshFeedsData(force) {
-    try {
-      const data = await fetchJSON('/api/feeds');
-      feedsList = data.feeds || [];
-    } catch (e) {
-      feedsList = [];
-    }
-    if (force) feedsSig = '';
-    renderFeedsPanel();
-    renderModeManager(); // v5 feedback 3：模式管理区跟随数据刷新
-  }
+  // refreshFeedsData 已抽到 wb-state.js（顶部 const refreshFeedsData 引入）
 
   function initRssPanel() {
     // 动态填充 RSS 订阅源添加表单的 mode multi-tag（v5 feedback 2：checkbox 多选）
@@ -2826,34 +2600,34 @@
     }
   }
 
-  // ---- 刷新系统卡 mode 状态：GET /api/syscards → 写入 SYS_CARDS[id].mode ----
-  // 启动时 + 任何 patchSysCard 后调用；保证前端 modeMatches 用的字段是最新的
-  async function refreshSysCards() {
-    try {
-      const data = await fetchJSON('/api/syscards');
-      const cards = (data && data.cards) || [];
-      // 先清空再回填（防止服务端去掉了某张卡，前端还残留旧 mode）
-      sysCardStates = {};
-      for (const c of cards) {
-        sysCardStates[c.id] = c.mode != null ? c.mode : null;
-        if (SYS_CARDS[c.id]) SYS_CARDS[c.id].mode = sysCardStates[c.id];
-      }
-      // 白名单内的卡但服务端没返回 → 视为 null（默认全部模式可见）
-      for (const id of Object.keys(SYS_CARDS)) {
-        if (!(id in sysCardStates)) {
-          sysCardStates[id] = null;
-          SYS_CARDS[id].mode = null;
-        }
-      }
-    } catch (e) {
-      // 服务端失败时全部回退 null（与缺 syscards-state.json 行为一致）
-      for (const id of Object.keys(SYS_CARDS)) {
-        if (SYS_CARDS[id]) SYS_CARDS[id].mode = null;
-      }
-    }
-    renderGrid();         // mode 字段变了，渲染按 modeMatches 重新过滤
-    renderModeManager();  // 模式管理区也要刷新（行内 multi-tag 反映最新 mode）
-  }
+  // ---- refreshSysCards 已抽到 wb-state.js（顶部 const refreshSysCards 引入） ----
+
+  // ---- 跨模块桥接：把渲染 / 工具函数挂到 WB（wb-state.js 的 refresh* 运行时调用） ----
+  // app.js 中仍保留函数本体；这里只做"挂载到 WB"以让 wb-state.js 的 if (WB.xxx) 守护调用能命中
+  // 待 wb-render.js / wb-action.js / wb-bookmarks.js / wb-settings.js 拆出后，这些函数搬走，本块删
+  WB.renderGrid = renderGrid;
+  WB.renderSystemCard = renderSystemCard;
+  WB.renderFuncCard = renderFuncCard;
+  WB.renderShortcutList = renderShortcutList;
+  WB.renderModeManager = renderModeManager;
+  WB.renderSidebarBookmarks = renderSidebarBookmarks;
+  WB.renderFeedsPanel = renderFeedsPanel;
+  WB.applyMasonry = applyMasonry;
+  WB.renderRssList = renderRssList;
+  WB.showBookmarkLoadFailedBanner = showBookmarkLoadFailedBanner;
+  WB.showToast = showToast;
+  WB.openExternal = openExternal;
+  WB.runButton = runButton;
+  WB.completeTask = completeTask;
+  WB.faviconImg = faviconImg;
+  WB.applyStyle = applyStyle;
+  WB.setMode = setMode;
+  WB.setStyle = setStyle;
+  WB.renderModeSwitchers = renderModeSwitchers;
+  WB.syncDragHintsForReadonly = syncDragHintsForReadonly;
+  WB.refreshAllCardAddBtns = refreshAllCardAddBtns;
+  WB.renderRssForReRender = renderRssForReRender;
+  WB.bindCardClick = bindCardClick;
 
   // ---- 初始化 ----
   async function init() {
