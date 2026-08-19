@@ -1,28 +1,35 @@
-// 工作台渲染模块（v1.2 拆分第四步）
+// =============================================================
+// wb-render.js · 工作台前端
+// =============================================================
+//
 // 职责：
-//   - 卡片顺序管理（getOrder / setOrder / defaultOrder，localStorage 持久化）
-//   - 卡片尺寸 spanClass（small/large/wide → span-small/large/wide）
-//   - keyed 渲染缓存（cardCache / dragActive）—— 轮询刷新复用 DOM，不打断拖拽
-//   - ensureFuncCard / ensureSystemCard（首次创建卡片 DOM + 引用缓存）
-//   - renderFuncCard / renderSystemCard（按数据重渲卡片内容）
-//   - 各系统卡专用渲染：renderMiniMaxCard / renderDidaTodayList / completeTask /
-//     renderDidaFocus / renderDshSessionsCard / renderRssList
-//   - renderGrid（全量渲染入口）
-//   - applyMasonry（Bento 瀑布流）
-//   - bindCardClick / faviconImg（卡片整体点击 / 书签小图标）
+//   - 卡片顺序管理（WB.getOrder / WB.setOrder / WB.defaultOrder，localStorage 持久化）
+//   - 卡片尺寸（WB.spanClass：small/large/wide → span-small/large/wide）
+//   - keyed 渲染缓存（WB.cardCache / WB.dragActive）—— 轮询刷新复用 DOM，不打断拖拽
+//   - 卡片创建（WB.ensureFuncCard / WB.ensureSystemCard：首次创建 DOM + 引用缓存）
+//   - 内容渲染（WB.renderFuncCard / WB.renderSystemCard：按数据重渲卡片内容）
+//   - 系统卡专用渲染（WB.renderMiniMaxCard / WB.renderDidaTodayList / WB.renderDidaFocus /
+//     WB.renderDshSessionsCard / WB.renderRssList）+ WB.completeTask
+//   - 全量渲染入口（WB.renderGrid）
+//   - Bento 瀑布流（WB.applyMasonry + MASONRY_ROW / MASONRY_GAP）
+//   - 卡片整体点击（WB.bindCardClick）+ 书签小图标（WB.faviconImg）
+//
 // 设计：
+//   - 加载顺序：先于 wb-action / wb-bookmarks / wb-drag / wb-search / wb-settings
+//     （本文件是它们的"渲染入口"——它们内部调 WB.renderGrid / WB.applyMasonry 等）
 //   - 所有共享状态从 WB.xxx 读取（无本地视图，无双写）
-//   - 跨文件函数用 WB.xxx() 运行时查找（showToast / openExternal / openModal / runButton /
-//     reportClientError 等可能来自 wb-action / wb-bookmarks 后续拆分）
-//   - 必须在 wb-core.js / wb-mode.js / wb-state.js 之后加载
-//   - wb-action.js / wb-bookmarks.js / wb-drag.js 等可在 wb-render 之前或之后加载（运行时查找）
+//   - 跨文件函数调用一律用 WB.xxx()（运行时查找）—— showToast / openExternal / openModal /
+//     runButton / completeTask / faviconImg / reportClientError 等可能在 wb-action / wb-bookmarks
+//   - WB.cardCache / WB.dragActive 暴露给 app.js（setMode / renderRssForReRender 需要）
+//   - 内部 const 引用（顶部 const SYS_CARDS = WB.SYS_CARDS 等）仅为简短访问，不跨文件共享
+// =============================================================
 
 (function () {
   'use strict';
 
   window.WB = window.WB || {};
 
-  // ==================== 共享引用（从 wb-core 读） ====================
+  // ===== 共享引用（从 wb-core / wb-mode 读） =====
   const SYS_CARDS = WB.SYS_CARDS;
   const CARD_ICONS = WB.CARD_ICONS;
   const applyCardIcon = WB.applyCardIcon;
@@ -34,7 +41,7 @@
   const isReadonlyMode = WB.isReadonlyMode;
   const modeMatches = WB.modeMatches;
 
-  // ==================== 顺序管理 ====================
+  // ===== 顺序管理 =====
   // 卡片顺序持久化（localStorage，仅本机浏览器）
   const ORDER_KEY = 'workbench-card-order';
 
@@ -62,7 +69,7 @@
   WB.setOrder = setOrder;
   WB.defaultOrder = defaultOrder;
 
-  // ==================== 卡片尺寸 ====================
+  // ===== 卡片尺寸 =====
   function spanClass(size) {
     if (size === 'large') return 'span-large';
     if (size === 'small') return 'span-small';
@@ -70,7 +77,8 @@
   }
   WB.spanClass = spanClass;
 
-  // ==================== keyed 渲染：卡片缓存（轮询刷新复用 DOM，不打断拖拽） ====================
+  // ===== keyed 渲染：卡片缓存 =====
+  // 轮询刷新复用 DOM，不打断拖拽
   const cardCache = new Map(); // id -> { el, refs, current }
   let dragActive = false;
   WB.cardCache = cardCache;
@@ -253,7 +261,7 @@
   WB.ensureFuncCard = ensureFuncCard;
   WB.ensureSystemCard = ensureSystemCard;
 
-  // ==================== 渲染功能卡内容 ====================
+  // ===== 渲染功能卡内容 =====
   function renderFuncCard(b) {
     const rec = ensureFuncCard(b.id, b.size);
     const { el, refs } = rec;
@@ -368,7 +376,7 @@
 
   WB.renderFuncCard = renderFuncCard;
 
-  // ==================== 渲染系统卡内容 ====================
+  // ===== 渲染系统卡内容 =====
   function renderSystemCard(id) {
     const rec = ensureSystemCard(id);
     const { refs } = rec;
@@ -475,7 +483,7 @@
 
   WB.renderSystemCard = renderSystemCard;
 
-  // ==================== MiniMax 套餐渲染：5h / 周窗口进度条 + 警示 ====================
+  // ===== MiniMax 套餐渲染 =====
   // 警示规则（D009 + 2026-08-16 修订）：
   //   - 5h 剩余 < 15%：行加 .danger（标签/百分比/进度条变红）。无 alert、无红框
   //     —— 进度条本身变红已足够表达"快耗尽"，红框与额外文字过于抢眼
@@ -650,7 +658,7 @@
 
   WB.formatResetIn = formatResetIn;
 
-  // ==================== 滴答今日任务列表渲染 ====================
+  // ===== 滴答今日任务列表渲染 =====
   // maxShow：每列最多显示条数（grid 布局传 5 限高，split/list 传 8 显示更多）
   // didaTodayExpanded：整体展开状态（点击任一列「还有 N 项」两列联动展开/收起；页面刷新恢复折叠）
   let didaTodayExpanded = false;
@@ -789,7 +797,7 @@
 
   WB.renderDidaTodayList = renderDidaTodayList;
 
-  // ==================== 点击完成任务 ====================
+  // ===== 点击完成任务 =====
   // 调服务端 MCP complete_task，成功后本地移除并重新渲染
   async function completeTask(t) {
     if (!t || !t.projectId || !t.id) {
@@ -818,7 +826,7 @@
 
   WB.completeTask = completeTask;
 
-  // ==================== 今日专注时长渲染 ====================
+  // ===== 今日专注时长渲染 =====
   function renderDidaFocus(valueEl) {
     const didaFocus = WB.didaFocus;
     if (!didaFocus) { valueEl.textContent = '—'; return; }
@@ -837,7 +845,7 @@
 
   WB.renderDidaFocus = renderDidaFocus;
 
-  // ==================== DSH 对话状态卡渲染 ====================
+  // ===== DSH 对话状态卡渲染 =====
   // v0.6.2 二态可见：working / pending；移除 unread
   const DSH_DOTS_MAX = 6;  // working 圆点上限
   function sessionLabel(a) {
@@ -908,7 +916,7 @@
 
   WB.renderDshSessionsCard = renderDshSessionsCard;
 
-  // ==================== RSS 信息卡渲染 ====================
+  // ===== RSS 信息卡渲染 =====
   function fmtRssDate(ts) {
     if (!ts) return '';
     const d = new Date(ts);
@@ -977,7 +985,8 @@
 
   WB.renderRssList = renderRssList;
 
-  // ==================== 全量渲染（keyed：复用节点，按序 append 实现排序） ====================
+  // ===== 全量渲染 =====
+  // keyed：复用节点，按序 append 实现排序
   function renderGrid() {
     if (dragActive) return; // 拖拽中跳过，避免重排打断手势
     const order = getOrder();
@@ -1066,7 +1075,7 @@
 
   WB.renderGrid = renderGrid;
 
-  // ==================== Bento 网格瀑布流 ====================
+  // ===== Bento 网格瀑布流 =====
   // CSS 已设 body[data-layout="grid"] .buttons-grid { grid-auto-rows: 10px }。
   // 行高单位 10px + gap 16px：卡片 span N 行 = N*10 + (N-1)*16 ≥ 卡高 ⟺ N ≥ (卡高+16)/26。
   // 同一同步块内：先量 auto 行高下的自然高度，再设固定行高 + span，浏览器只渲染最终结果。
@@ -1088,7 +1097,7 @@
 
   WB.applyMasonry = applyMasonry;
 
-  // ==================== 卡片整体点击（信息卡用） ====================
+  // ===== 卡片整体点击（信息卡用） =====
   // 拖拽只从 ⠿ 手柄触发（document mousedown），
   // 手柄拖拽产生的 click 已被 suppressClick 吞掉，能走到这里的都是真实点击
   function bindCardClick(el, fn) {

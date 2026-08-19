@@ -23,7 +23,7 @@ const EDGE_CANDIDATES = [
 ];
 const BASE = 'http://127.0.0.1:3180';
 const PROFILE = mkdtempSync(join(tmpdir(), 'workbench-syscard-mode-'));
-const SYSCARDS_STATE = 'F:\\AllWorkSpace\\workbench\\syscards-state.json';
+const SYSCARDS_STATE = join(import.meta.dirname, '..', 'syscards-state.json');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const results = [];

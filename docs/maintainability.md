@@ -2,7 +2,7 @@
 
 > 适用：本工作台的前端 JS 模块拆分与编码风格。读者：维护者、AI agent、code review 工具。
 >
-> 精神来源：DSH 插件的 `E:\dsh-plugins\docs\maintainability.md`（共享"按职责拆分 + 文档化决策 + 禁止 AI 风格漂移"的核心思路），但**工作台与 DSH 插件技术栈差异大**——DSH 是 `client bundle` 单文件 IIFE 工厂（必须 ES5 / 必须拼回）；工作台是浏览器原生 `<script>` 加载多文件（可 ES2015+ / 无 build step）。本规范针对后者定制。
+> 精神来源：DSH 插件的 maintainability 规范（`dsh-plugins/docs/maintainability.md`，共享"按职责拆分 + 文档化决策 + 禁止 AI 风格漂移"的核心思路），但**工作台与 DSH 插件技术栈差异大**——DSH 是 `client bundle` 单文件 IIFE 工厂（必须 ES5 / 必须拼回）；工作台是浏览器原生 `<script>` 加载多文件（可 ES2015+ / 无 build step）。本规范针对后者定制。
 
 ## 一、问题背景
 
@@ -279,8 +279,8 @@ docs(workbench): HACKING.md §2 + DEV.md §8 记录前端拆分
 
 ## 十三、相关
 
-- `F:\AllWorkSpace\workbench\HACKING.md` —— 工作台开发者 onboarding 入口（必读）
-- `F:\AllWorkSpace\workbench\DEV.md` —— 完整参考手册（71KB）
-- `E:\dsh-plugins\docs\maintainability.md` —— DSH 插件拆分规范（精神来源，但技术栈差异大）
-- `F:\AllWorkSpace\AGENTS.md` —— 工作区元规则
-- `F:\AllWorkSpace\DECISIONS.md` —— "代码里看不出的决策"日志
+- `./HACKING.md` —— 工作台开发者 onboarding 入口（必读）
+- `./DEV.md` —— 完整参考手册（71KB）
+- DSH 插件 maintainability 规范（精神来源，但技术栈差异大）
+- 工作区元规则 `AGENTS.md`
+- 决策日志 `DECISIONS.md`

@@ -1,23 +1,27 @@
-// 工作台模式模块（v1.2 拆分第二步）
+// =============================================================
+// wb-mode.js · 工作台前端
+// =============================================================
+//
 // 职责：
-//   - 模式配置（MODES）：默认内置 + 启动时从 /api/modes 拉取 modes.json 覆盖
-//   - 当前模式（currentMode）：localStorage 持久化；用户态
-//   - 只读模式判断（isReadonlyMode）：用于禁用拖拽 / 编辑控件 / 主题切换
-//   - 模式匹配（modeMatches）：判定 mode 字段是否在当前模式下可见
-//   - multi-tag 组件（renderModeTags）：inline 编辑 mode 字段
-//   - mode id → 中文标签（modeLabel）
+//   - 模式配置（WB.MODES）：默认内置 + 启动时从 /api/modes 拉取 modes.json 覆盖
+//   - 当前模式（WB.currentMode）：localStorage 持久化；用户态
+//   - 只读模式判断（WB.isReadonlyMode）：用于禁用拖拽 / 编辑控件 / 主题切换
+//   - 模式匹配（WB.modeMatches）：判定 mode 字段是否在当前模式下可见
+//   - multi-tag 组件（WB.renderModeTags）：inline 编辑 mode 字段
+//   - mode id → 中文标签（WB.modeLabel）
+//
 // 设计：
-//   - 依赖 wb-core.js（仅用 WB 命名空间，不读其他模块）
-//   - 被多数模块依赖（render / settings / bookmarks / drag 等）—— 必须在 wb-state.js / wb-render.js / wb-bookmarks.js / wb-drag.js / wb-settings.js 之前加载
+//   - 加载顺序：先于 wb-state / wb-render / wb-bookmarks / wb-drag / wb-settings（多数模块依赖 isReadonlyMode / modeMatches）
 //   - 状态用 WB.xxx = ... 暴露（let 变量挂到对象属性即可模拟）
-//   - 拆分前位于 app.js line 33-41 + 212-232 + 1102-1170 + 1879-1882
+//   - 加新模式 = 改 modes.json 一条，零代码改动（白名单校验 + 切换器动态渲染）
+// =============================================================
 
 (function () {
   'use strict';
 
   window.WB = window.WB || {};
 
-  // ==================== 模式配置 ====================
+  // ===== 模式配置 =====
   // 启动时 fetch /api/modes 拿 modes.json；失败回退内置默认（与 server.js DEFAULT_MODES 镜像）。
   // modes 配置是 {default, modes:[{id,name,icon,readonly,description}]}：
   //   - readonly = true  → 进入该模式时挂全局只读态（拖拽 / 改色 / 改尺寸 / 书签 / RSS 增删拖拽 全部拦截）
@@ -32,14 +36,14 @@
   WB.MODES_LOADED = false;             // 是否已从 /api/modes 拉取（防止首次渲染未拿到的竞态）
   WB.currentMode = 'work';             // 当前模式：用户态，从 localStorage `workbench-mode` 读；不影响服务端
 
-  // ==================== 当前模式是否只读 ====================
+  // ===== 当前模式是否只读 =====
   // 派生自 currentMode 对应的 mode 定义；每次切换模式时重算
   WB.isReadonlyMode = function () {
     const m = WB.MODES.modes.find((x) => x.id === WB.currentMode);
     return !!(m && m.readonly === true);
   };
 
-  // ==================== 模式匹配 ====================
+  // ===== 模式匹配 =====
   // mode 字段语义（与 server.js normalizeModeField 保持一致）：
   //   undefined / null                → 全部模式可见（默认；与 buttons.json 旧字段缺失行为一致）
   //   'work' / 'entertainment' / 自定义模式 id（modes.json 定义） → 仅该模式可见
@@ -61,14 +65,14 @@
     return true;
   };
 
-  // ==================== 模式 id → 中文标签 ====================
+  // ===== 模式 id → 中文标签 =====
   // 找不到回退 id 本身
   WB.modeLabel = function (id) {
     const m = WB.MODES.modes.find((x) => x.id === id);
     return m ? m.name : id;
   };
 
-  // ==================== 模式 multi-tag 组件 ====================
+  // ===== 模式 multi-tag 组件 =====
   // currentMode 接受四态：null / undefined / []    → "全部模式可见"（无勾选，默认）
   //                        字符串（非 __hidden__） → 仅该模式可见
   //                        字符串数组              → 这些模式都可见

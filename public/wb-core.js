@@ -1,21 +1,27 @@
-// 工作台核心模块（v1.2 拆分第一步）
+// =============================================================
+// wb-core.js · 工作台前端
+// =============================================================
+//
 // 职责：
 //   - 共享 DOM 引用（grid / logsList / dot / statusText / titleEl）
-//   - 系统信息卡定义 + 卡片图标（Unicode + 软件自身图标）
-//   - 数字滚动动画（animateValue / setNum）
-//   - 数据获取（fetchJSON，统一错误处理）
-//   - 客户端错误上报（window error / unhandledrejection → /api/log-client-error）
+//   - 系统信息卡定义（WB.SYS_CARDS：与 server.js SYS_CARDS_WHITELIST 镜像）
+//   - 卡片图标（WB.CARD_ICONS：Unicode 字符 + 软件自身图标）
+//   - 数字滚动动画（WB.animateValue / WB.setNum）
+//   - 数据获取（WB.fetchJSON，统一错误处理）
+//   - 客户端错误上报（WB.reportClientError + window error/unhandledrejection 监听）
+//
 // 设计：
-//   - 本文件必须先于 app.js 加载（app.js 内部代码依赖这里挂到 window 的变量）
+//   - 必须最先加载（其他所有 wb-*.js 都依赖这里的 WB.grid / WB.fetchJSON 等）
 //   - 所有导出挂到 window.WB 命名空间，避免污染全局
 //   - 不持有任何"业务状态"——纯工具 + 元数据
-//   - 拆分前位于 app.js line 5-189（共享 DOM 引用 + SYS_CARDS + CARD_ICONS + applyCardIcon + 动画 + fetchJSON + 错误上报）
+//   - WB.SYS_CARDS / WB.CARD_ICONS 是 UPPER_SNAKE 常量（配置）；其余 camelCase
+// =============================================================
 
 (function () {
   'use strict';
 
-  // ==================== 共享 DOM 引用 ====================
-  // 这些元素在页面加载时一次性取好（id 不变）；任何模块都能通过 window.WB.grid 等访问
+  // ===== 共享 DOM 引用 =====
+  // 一次性取好（id 不变）；任何模块都能通过 window.WB.grid 等访问
   window.WB = window.WB || {};
   WB.grid = document.getElementById('buttons-grid');
   WB.logsList = document.getElementById('logs-list');
@@ -23,8 +29,8 @@
   WB.statusText = document.getElementById('server-status-text');
   WB.titleEl = document.getElementById('workbench-title');
 
-  // ==================== 系统信息卡定义（内置，非 buttons.json 按钮） ====================
-  // 与 server.js SYS_CARDS_WHITELIST 硬约定（改这里要同步）
+  // ===== 系统信息卡定义 =====
+  // 内置（不在 buttons.json），与 server.js SYS_CARDS_WHITELIST 硬约定
   WB.SYS_CARDS = {
     'sys-balance':   { id: 'sys-balance',   name: 'DeepSeek 余额', size: 'small', kind: 'stat' },
     'sys-status':    { id: 'sys-status',    name: '系统状态',      size: 'small', kind: 'status' },
@@ -36,7 +42,8 @@
     'sys-rss':       { id: 'sys-rss',       name: 'RSS 订阅',      size: 'wide',  kind: 'rss' },
   };
 
-  // ==================== 卡片图标（Unicode 字符，随主题色显示，可用开关关闭） ====================
+  // ===== 卡片图标 =====
+  // Unicode 字符，随主题色显示；可用 ICONS_KEY 开关关闭
   WB.CARD_ICONS = {
     dsh: '⚙',
     push: '▣',
@@ -74,7 +81,8 @@
     }
   };
 
-  // ==================== 数字滚动动画（ease-out cubic，600ms） ====================
+  // ===== 数字滚动动画 =====
+  // ease-out cubic，600ms；由 wb-render 用于余额卡数字滚动
   WB.animateValue = function (el, from, to, fmt, duration) {
     duration = duration || 600;
     const start = performance.now();
@@ -97,14 +105,16 @@
     }
   };
 
-  // ==================== 数据获取（统一错误处理：HTTP 非 2xx 抛 Error） ====================
+  // ===== 数据获取 =====
+  // 统一错误处理：HTTP 非 2xx 抛 Error；调用方用 try/catch 捕获
   WB.fetchJSON = async function (url, options) {
     const r = await fetch(url, options);
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.json();
   };
 
-  // ==================== 客户端错误上报 ====================
+  // ===== 客户端错误上报 =====
+  // 排查"点了没反应"：页面 JS 错误实时发到服务端日志（workbench.log 的 [client] 行）
   // 排查"点了没反应"：页面 JS 错误实时发到服务端日志（workbench.log 的 [client] 行）
   WB.reportClientError = function (msg) {
     try {

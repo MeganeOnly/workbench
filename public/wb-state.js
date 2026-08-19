@@ -1,26 +1,32 @@
-// 工作台状态模块（v1.2 拆分第三步）
+// =============================================================
+// wb-state.js · 工作台前端
+// =============================================================
+//
 // 职责：
-//   - 全局状态变量（buttons / busy / queueInfo / balanceData / bookmarks / didaToday /
-//     didaFocus / minimaxData / rssData / feedsList / dshSessions / sysCardStates / searchQ /
-//     workbenchOnline / loadedVersion / versionChecked）
-//   - 轮询刷新函数（refreshButtons / refreshQueue / refreshBalance / refreshDidaToday /
-//     refreshDidaFocus / refreshMiniMax / refreshLogs / refreshRss / refreshDshSessions /
-//     refreshBookmarks / refreshFeedsData / refreshSysCards）
-//   - 价格时段徽章（updateRateBadge / isPeakHour / nextPeakStart）
+//   - 全局状态变量（WB.buttons / WB.busy / WB.queueInfo / WB.balanceData / WB.bookmarks /
+//     WB.didaToday / WB.didaFocus / WB.minimaxData / WB.rssData / WB.feedsList /
+//     WB.dshSessions / WB.sysCardStates / WB.searchQ / WB.workbenchOnline /
+//     WB.loadedVersion / WB.versionChecked）
+//   - 轮询刷新函数（WB.refreshButtons / WB.refreshQueue / WB.refreshBalance /
+//     WB.refreshDidaToday / WB.refreshDidaFocus / WB.refreshMiniMax / WB.refreshLogs /
+//     WB.refreshRss / WB.refreshDshSessions / WB.refreshBookmarks / WB.refreshFeedsData /
+//     WB.refreshSysCards）
+//   - 价格时段徽章（WB.updateRateBadge / WB.isPeakHour / WB.nextPeakStart）
+//
 // 设计：
+//   - 加载顺序：先于 wb-render / wb-bookmarks / wb-settings / wb-action / wb-drag / wb-search
+//     （本文件是这些模块的"数据源"）
 //   - 跨文件函数调用一律用 WB.xxx()（运行时查找）—— 避开循环加载问题
-//   - 不缓存其他模块的函数引用（wb-render / wb-bookmarks / wb-settings / wb-action 可能
-//     加载顺序不固定）
-//   - 拆分前位于 app.js line 20-32（let 状态变量）+ line 130-167（价格时段）+
-//     line 1500-1846（refreshXxx 等所有刷新函数）
-//   - 与 wb-core.js / wb-mode.js 解耦：只依赖 fetchJSON / reportClientError
+//   - 数组状态变量用 mutate 而非 replace（WB.buttons.length = 0; push(...)）—— 保留引用
+//     让 app.js 中的本地 let buttons = WB.buttons 同步看到新数据
+// =============================================================
 
 (function () {
   'use strict';
 
   window.WB = window.WB || {};
 
-  // ==================== 全局状态变量 ====================
+  // ===== 全局状态变量 =====
   WB.buttons = [];
   WB.busy = {};
   WB.queueInfo = null;
@@ -38,7 +44,7 @@
   WB.loadedVersion = null;        // 启动时记录的前端文件哈希；版本自检用
   WB.versionChecked = false;      // 是否已做首次版本自检
 
-  // ==================== 价格时段（DeepSeek 峰谷定价） ====================
+  // ===== 价格时段（DeepSeek 峰谷定价） =====
   // 高峰 9-12 / 14-18（北京时间），其余空闲半价。徽章状态写入 DOM #rate-badge。
   // 与 server.js 端价格计算无关——纯前端提示
   WB.isPeakHour = function (d) {
@@ -87,7 +93,7 @@
     }
   };
 
-  // ==================== 刷新：按钮 / 队列 / 余额 / MiniMax / 日志 / RSS ====================
+  // ===== 刷新：按钮 / 队列 / 余额 / MiniMax / 日志 / RSS =====
   WB.refreshButtons = async function () {
     try {
       const data = await WB.fetchJSON('/api/buttons');
@@ -260,7 +266,7 @@
     if (WB.renderSystemCard) WB.renderSystemCard('sys-dsh-sessions');
   };
 
-  // ==================== 刷新：书签 / RSS 订阅源 / 系统卡 mode ====================
+  // ===== 刷新：书签 / RSS 订阅源 / 系统卡 mode =====
   WB.refreshBookmarks = async function () {
     try {
       const data = await WB.fetchJSON('/api/bookmarks');
