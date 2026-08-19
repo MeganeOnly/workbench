@@ -277,6 +277,12 @@ function saveBookmarks() {
   }
 }
 
+// ---- 系统信息卡 mode 持久化（syscards-state.json：8 张内置信息卡的 mode 字段）----
+// 存储路径常量 + 初始化见 normalizeModeField 之后的「系统卡 mode」段。
+// SYS_CARDS 是 app.js 内置的（keyed 渲染复用 DOM），无 buttons.json 这种配置文件；
+// 用户在「模式管理区」给每张系统卡配 mode 后，需要服务端持久化 + 启动时回填到前端 SYS_CARDS。
+// 字段语义与 bookmarks/feeds 同款：null = 全部模式可见；字符串 = 单模式；数组 = 多模式；'__hidden__' = 隐藏。
+const SYSCARDS_PATH = path.join(ROOT, 'syscards-state.json');
 // ---- RSS 订阅源（信息卡：用户自配 RSS/Atom 源，持久化到 feeds.json）----
 const MODES_PATH = path.join(ROOT, 'modes.json');
 
@@ -336,6 +342,61 @@ function normalizeModeField(m) {
     return arr.length ? arr : null;
   }
   return null;
+}
+
+// ---- 系统信息卡 mode 持久化（syscards-state.json：8 张内置信息卡的 mode 字段）----
+// SYS_CARDS 是 app.js 内置的（keyed 渲染复用 DOM），无 buttons.json 这种配置文件；
+// 用户在「模式管理区」给每张系统卡配 mode 后，需要服务端持久化 + 启动时回填到前端 SYS_CARDS。
+// 字段语义与 bookmarks/feeds 同款：null = 全部模式可见；字符串 = 单模式；数组 = 多模式；'__hidden__' = 隐藏。
+// SYS_CARDS_WHITELIST 的 id 必须与 app.js 的 SYS_CARDS key 完全对齐（前后端硬约定）。
+const SYS_CARDS_WHITELIST = [
+  'sys-balance',
+  'sys-status',
+  'sys-dsh-sessions',
+  'sys-bookmarks',
+  'sys-dida-today',
+  'sys-dida-focus',
+  'sys-minimax',
+  'sys-rss',
+];
+// 系统卡的展示名（与 app.js SYS_CARDS.name 对齐；用于模式管理区行展示）
+const SYS_CARD_DISPLAY_NAMES = {
+  'sys-balance':      'DeepSeek 余额',
+  'sys-status':       '系统状态',
+  'sys-dsh-sessions': 'DSH 对话',
+  'sys-bookmarks':    '书签',
+  'sys-dida-today':   '滴答今日任务',
+  'sys-dida-focus':   '滴答专注',
+  'sys-minimax':      'MiniMax 套餐',
+  'sys-rss':          'RSS 订阅',
+};
+let syscardModes = {};  // id -> normalizeModeField 后的 mode 字段（启动时从文件读；旧数据缺省视为 null）
+try {
+  if (fs.existsSync(SYSCARDS_PATH)) {
+    const raw = fs.readFileSync(SYSCARDS_PATH, 'utf8').replace(/^\uFEFF/, '');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      for (const id of SYS_CARDS_WHITELIST) {
+        const v = parsed[id];
+        syscardModes[id] = (v !== undefined) ? normalizeModeField(v) : null;
+      }
+    }
+  }
+  // 旧文件缺失 / 解析失败 / 是数组 → 全部置 null（向后兼容：默认全部模式可见）
+  for (const id of SYS_CARDS_WHITELIST) {
+    if (!(id in syscardModes)) syscardModes[id] = null;
+  }
+} catch (e) {
+  console.error('读取 syscards-state.json 失败，使用内置默认:', e.message);
+  for (const id of SYS_CARDS_WHITELIST) syscardModes[id] = null;
+}
+
+function saveSysCards() {
+  try {
+    fs.writeFileSync(SYSCARDS_PATH, JSON.stringify(syscardModes, null, 2), 'utf8');
+  } catch (e) {
+    console.error('写入 syscards-state.json 失败:', e.message);
+  }
 }
 
 const FEEDS_PATH = path.join(ROOT, 'feeds.json');
@@ -1693,6 +1754,37 @@ const server = http.createServer(async (req, res) => {
       return json(res, { ok: true });
     } catch (e) {
       return json(res, { ok: false, error: '更新失败: ' + e.message }, 400);
+    }
+  }
+
+  // 系统信息卡 mode：返回 8 张内置系统卡的当前 mode（供「模式管理区」展示 + renderGrid 过滤）
+  if (p === '/api/syscards' && req.method === 'GET') {
+    const cards = SYS_CARDS_WHITELIST.map((id) => ({
+      id,
+      name: SYS_CARD_DISPLAY_NAMES[id] || id,
+      mode: syscardModes[id] != null ? syscardModes[id] : null,
+    }));
+    return json(res, { cards });
+  }
+
+  // PATCH /api/syscards/<id>：更新某张系统卡的 mode（字段语义与 PATCH bookmarks/feeds 同款）
+  // 仅接受白名单内的 id；非法 mode id 走 normalizeModeField 静默回退 null
+  if (p.startsWith('/api/syscards/') && req.method === 'PATCH') {
+    const id = decodeURIComponent(p.slice('/api/syscards/'.length));
+    if (!SYS_CARDS_WHITELIST.includes(id)) {
+      return json(res, { ok: false, error: '未知的系统卡: ' + id }, 404);
+    }
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    try {
+      const patch = JSON.parse(body) || {};
+      if (Object.prototype.hasOwnProperty.call(patch, 'mode')) {
+        syscardModes[id] = normalizeModeField(patch.mode);
+      }
+      saveSysCards();
+      return json(res, { ok: true, card: { id, mode: syscardModes[id] } });
+    } catch (e) {
+      return json(res, { ok: false, error: '请求格式错误: ' + e.message }, 400);
     }
   }
 

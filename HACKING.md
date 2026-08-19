@@ -3,9 +3,11 @@
 > **本文件是工作台项目的快速上手入口。** 改代码前 5 分钟读这份 → 直接动手；遇到细节 → 跳 [`DEV.md`](./DEV.md) 对应章节。
 > 完整 API、机制详解、所有版本变更历史都在 DEV.md（53KB，本机专属）；本文件是入口与索引，不是替代。
 >
-> **上次更新**：2026-08-18（D049 / 前版 v0.9.4 marker；完整变更历史见 `DEV.md §8`）
+> **上次更新**：2026-08-18（v1 系统卡 mode 选择 + D049；完整变更历史见 `DEV.md §8`）
 
 > **新概念**：mode 字段 4 态——`null` / `string` / `string[]` / `'__hidden__'`（v0.8 新增）；`__hidden__` 是 UI 上"隐藏"按钮对应的 sentinel，与具体模式互斥（content 在任何模式下都不显示）。
+>
+> **v1 新增**：系统信息卡（`SYS_CARDS` 内置 8 张）也支持 mode 选择——模式管理区第 5 组「系统卡」，默认全部模式可见；用户主动配置后服务端 `syscards-state.json` 持久化（详见 §4 行 + DEV §8 2026-08-18 v1）。
 
 ---
 
@@ -93,11 +95,12 @@
 | 想让工作模式"只读" | `modes.json` 设 `readonly:true` | 已有实现：拖拽手柄不渲染、外观/布局/偏好/快捷方式/RSS 区 pointer-events:none、按钮执行不被锁 |
 | 编辑书签的 mode（创建后） | 侧栏 ✎ / 卡片墙 ✎ → modal 改 name/url/mode | v0.7 改为 multi-tag（v0.5 之前是 select 单选）；PATCH `/api/bookmarks/<id>` |
 | 编辑快捷方式（卡片）的 mode（创建后） | 设置面板「快捷方式」列表项的 multi-tag | v0.7 改为 multi-tag；POST `/api/buttons/update` 接受 mode 字段 |
-| 一处编辑所有内容 mode | 设置面板「模式管理」区（v0.7 新增） | 4 类内容分组：书签 / RSS 源 / 快捷方式 / 手动配置按钮；每行 inline multi-tag 实时 PATCH；手动配置按钮只读（需改 buttons.json） |
+| 一处编辑所有内容 mode | 设置面板「模式管理」区（v0.7 新增） | **5 类内容分组**（v1 新增系统卡）：书签 / RSS 源 / 快捷方式 / 手动配置按钮 / **系统卡**；每行 inline multi-tag 实时 PATCH；手动配置按钮只读（需改 buttons.json） |
 | 调整 multi-tag 组件（按钮 / 视觉 / 状态机） | `public/app.js` 的 `renderModeTags`（line ~1078）+ `public/style.css` `.mode-tag*` + 服务端 `normalizeModeField` | v0.8 设计原则见 §3.5；mode 字段 4 态（null/string/array/`__hidden__`）；改完跑 `tests/test-mode-tags.mjs` + `tests/test-mode.mjs` + `tests/test-click.mjs` |
+| 想让系统信息卡（滴答 / 余额 / RSS 等）也只在某模式显示 | 样式 → 模式管理 → 「系统卡」分组（v1 新增） | 默认全部模式可见（向后兼容）；勾具体模式 / 「隐藏」→ PATCH `/api/syscards/<id>` 持久化到 `syscards-state.json`；服务端白名单（`SYS_CARDS_WHITELIST` 8 个 id）+ `normalizeModeField` 兜底非法 mode id；前端 `SYS_CARDS[id].mode` 是 `modeMatches` 真源；改完跑 `tests/test-syscard-mode.mjs` |
 | 系统卡（如滴答今日/专注）卡在"读取中..." | 浏览器侧 fetch 永不返回（扩展 / SW / 网络层死锁）→ `didaToday` 永远 null | v0.8.1 修复：`refreshDidaToday` / `refreshDidaFocus` 加 10s `AbortController` 超时 + console 日志；Ctrl+F5 后看 DevTools Console 是否出现 `[dida-today] failed: AbortError` 定位原因。详见 [DEV §8 2026-08-18](#) |
 | 让内容"隐藏"（不在任何模式显示） | multi-tag 勾"隐藏"按钮 → mode = `'__hidden__'` | v0.8 新增 sentinel；服务端 `normalizeModeField` 白名单识别；前端 `modeMatches` 永远 false |
-| 模式管理区按分类收起 | 设置面板「模式管理」4 个分组的标题行（v0.8 可点击 button） | localStorage `workbench-fold-mmgr-{groupId}` 持久化；4 个 groupId 固定：`bookmark` / `feed` / `shortcut` / `manual` |
+| 模式管理区按分类收起 | 设置面板「模式管理」5 个分组的标题行（v0.8 可点击 button；v1 新增系统卡组） | localStorage `workbench-fold-mmgr-{groupId}` 持久化；**5 个** groupId 固定：`bookmark` / `feed` / `shortcut` / `manual` / `syscard` |
 | 晚间统一推送 GitHub | 本机开发者约定，按各自 skill / 脚本走 | 自动 fetch + 分歧检测 + 敏感内容审计 + 列文件 + 默认确认 |
 | 调整 MiniMax 周限额 marker 样式 / 算法 / edge case | `public/app.js` 的 `renderMiniMaxCard`（marker 计算块，line ~770）+ `public/style.css` 的 `.mmx-bar-marker` 段 + `tests/test-minimax.mjs`（5 个 marker 断言 A/B/C/D/E + 2 个形状 A.5） | Ctrl+F5 | v0.9 算法（marker 周期用 `wweek.windowMinutes` 动态）+ v0.9.4 视觉（SVG 右括号 `)`，10×10 viewBox，path `M 5 0 Q 10 5, 5 10`）；位置/title/edge case 逻辑不变 |
 

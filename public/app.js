@@ -19,6 +19,7 @@
   let rssData = null;      // RSS 信息卡数据（/api/rss）
   let feedsList = [];      // RSS 订阅源列表（设置面板管理，/api/feeds）
   let dshSessions = null;  // DSH 对话状态聚合（/api/dsh-sessions）：{ status: 'working'|'idle'|'offline'|'error', running, total, active }
+  let sysCardStates = {};  // 系统卡 mode 状态（/api/syscards）：id -> mode（已规范化）。启动后写入 SYS_CARDS[id].mode
   let searchQ = '';        // 顶栏搜索关键字（已小写；空 = 不过滤）
   // 模式配置：启动时 fetch /api/modes 拿 modes.json；失败回退内置默认（与 server.js DEFAULT_MODES 镜像）。
   // modes 配置是 {default, modes:[{id,name,icon,readonly,description}]}：
@@ -2767,10 +2768,10 @@
     refreshFeedsData();
   }
 
-  // ---- 模式管理区（v5 feedback 3）—— 统一查看 + inline 编辑所有内容mode 字段 ----
-  // 3 类：功能按钮（普通按钮，排除 dida/push/toggle/系统卡） / 书签 / RSS 源
+  // ---- 模式管理区（v5 feedback 3）—— 统一查看 + inline 编辑所有内容 mode 字段 ----
+  // 5 类（v1 新增第 5 组系统卡）：功能按钮（普通按钮） / 书签 / RSS 源 / 手动配置按钮（只读）/ 系统卡
   // 每行展示：图标 + 名称 + 当前模式标签 + multi-tag 编辑器（实时 PATCH/POST）
-  // 持久化：刷新按钮/书签/RSS 后重新拉取并重渲染（refreshButtons/refreshBookmarks/refreshFeedsData 都在 init 末轮询）
+  // 持久化：刷新按钮/书签/RSS 后重新拉取并重渲染（refreshButtons/refreshBookmarks/refreshFeedsData + refreshSysCards 都在 init 末轮询）
   // 注：手动配置的普通按钮只能看到，不能在这里编辑（buttons.json 是配置文件，没 UI 入口）
   function initModeManager() {
     renderModeManager();
@@ -2826,10 +2827,21 @@
         onChange: null, // 标记为只读
       }))));
     }
+    // 分组 5：系统卡（v1 新增：SYS_CARDS 内置 8 张信息卡也能选模式）
+    // inline 编辑走 PATCH /api/syscards/<id>；SYS_CARDS_WHITELIST 与服务端硬约定
+    const sysCardRows = Object.keys(SYS_CARDS).map((id) => ({
+      key: 'syscard:' + id,
+      icon: CARD_ICONS[id] || '◇',
+      name: SYS_CARDS[id].name || id,
+      title: id,
+      mode: SYS_CARDS[id].mode,
+      onChange: (newMode) => patchSysCard(id, newMode),
+    }));
+    root.appendChild(renderModeManagerGroup('syscard', '系统卡', sysCardRows));
   }
 
   // 单个分组：标题 + 行列表（v0.8：分组标题可点击折叠，状态持久化）
-  // groupId 用于 localStorage key 稳定标识——4 个分组固定：bookmark / feed / shortcut / manual
+  // groupId 用于 localStorage key 稳定标识——5 个分组固定：bookmark / feed / shortcut / manual / syscard
   function renderModeManagerGroup(groupId, title, rows) {
     const wrap = document.createElement('div');
     wrap.className = 'mode-manager-group';
@@ -2965,6 +2977,60 @@
     }
   }
 
+  // 模式管理区行编辑：PATCH /api/syscards/<id>（系统卡 mode；同步 SYS_CARDS[id].mode + 重新渲染）
+  // 字段语义与 patchBookmark/patchFeed 同款：null / 字符串 / 数组 / '__hidden__'
+  async function patchSysCard(id, newMode) {
+    try {
+      const r = await fetch('/api/syscards/' + encodeURIComponent(id), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: newMode }),
+      });
+      const res = await r.json().catch(() => ({}));
+      if (res.ok) {
+        // 本地回填：SYS_CARDS[id].mode 是 modeMatches 的真源，刷新后卡片墙立即生效
+        sysCardStates[id] = res.card ? res.card.mode : newMode;
+        if (SYS_CARDS[id]) SYS_CARDS[id].mode = sysCardStates[id];
+        showToast('已更新系统卡模式', 'ok');
+        renderGrid();       // 立即重新过滤（modeMatches(SYS_CARDS[id].mode)）
+        renderModeManager(); // 模式管理区本身也要刷新（其它行不变，仅本行 active 状态）
+      } else {
+        showToast('更新失败: ' + (res.error || ''), 'err');
+      }
+    } catch (e) {
+      showToast('更新失败: ' + e.message, 'err');
+    }
+  }
+
+  // ---- 刷新系统卡 mode 状态：GET /api/syscards → 写入 SYS_CARDS[id].mode ----
+  // 启动时 + 任何 patchSysCard 后调用；保证前端 modeMatches 用的字段是最新的
+  async function refreshSysCards() {
+    try {
+      const data = await fetchJSON('/api/syscards');
+      const cards = (data && data.cards) || [];
+      // 先清空再回填（防止服务端去掉了某张卡，前端还残留旧 mode）
+      sysCardStates = {};
+      for (const c of cards) {
+        sysCardStates[c.id] = c.mode != null ? c.mode : null;
+        if (SYS_CARDS[c.id]) SYS_CARDS[c.id].mode = sysCardStates[c.id];
+      }
+      // 白名单内的卡但服务端没返回 → 视为 null（默认全部模式可见）
+      for (const id of Object.keys(SYS_CARDS)) {
+        if (!(id in sysCardStates)) {
+          sysCardStates[id] = null;
+          SYS_CARDS[id].mode = null;
+        }
+      }
+    } catch (e) {
+      // 服务端失败时全部回退 null（与缺 syscards-state.json 行为一致）
+      for (const id of Object.keys(SYS_CARDS)) {
+        if (SYS_CARDS[id]) SYS_CARDS[id].mode = null;
+      }
+    }
+    renderGrid();         // mode 字段变了，渲染按 modeMatches 重新过滤
+    renderModeManager();  // 模式管理区也要刷新（行内 multi-tag 反映最新 mode）
+  }
+
   // ---- 初始化 ----
   async function init() {
     // 先加载模式定义（modes.json）：决定切换器 / 设置面板 / 只读态 / 模式白名单
@@ -2996,6 +3062,7 @@
     await refreshQueue();
     await refreshBookmarks();
     await refreshBalance();
+    await refreshSysCards();   // v1：系统卡 mode（启动时拉一次 → 写入 SYS_CARDS[id].mode）
     await refreshDidaToday();
     await refreshDidaFocus();
     await refreshMiniMax();

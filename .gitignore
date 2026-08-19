@@ -17,6 +17,7 @@ bookmarks.json
 dida-state.json
 push-state.json
 feeds.json
+syscards-state.json
 
 # 自动生成的缓存与图标（换机后随「添加快捷方式」重新生成）
 favicons/
