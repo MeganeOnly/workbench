@@ -16,6 +16,7 @@
   const setNum = WB.setNum;
   const fetchJSON = WB.fetchJSON;
   const reportClientError = WB.reportClientError;
+  // wb-mode.js 暴露的函数（isReadonlyMode / modeMatches / modeLabel / renderModeTags）由下面"模式系统"块声明 let 后再引入
 
   let buttons = [];
   let busy = {};
@@ -30,24 +31,15 @@
   let dshSessions = null;  // DSH 对话状态聚合（/api/dsh-sessions）：{ status: 'working'|'idle'|'offline'|'error', running, total, active }
   let sysCardStates = {};  // 系统卡 mode 状态（/api/syscards）：id -> mode（已规范化）。启动后写入 SYS_CARDS[id].mode
   let searchQ = '';        // 顶栏搜索关键字（已小写；空 = 不过滤）
-  // 模式配置：启动时 fetch /api/modes 拿 modes.json；失败回退内置默认（与 server.js DEFAULT_MODES 镜像）。
-  // modes 配置是 {default, modes:[{id,name,icon,readonly,description}]}：
-  //   - readonly = true  → 进入该模式时挂全局只读态（拖拽 / 改色 / 改尺寸 / 书签 / RSS 增删拖拽 全部拦截）
-  //   - 加新模式 = 改 modes.json 一条，零代码改动（白名单校验 + 切换器动态渲染）
-  let MODES = {
-    default: 'work',
-    modes: [
-      { id: 'work', name: '工作', icon: '▣', readonly: true, description: '工作模式' },
-      { id: 'entertainment', name: '娱乐', icon: '▶', readonly: false, description: '娱乐模式' },
-    ],
-  };
-  let MODES_LOADED = false;             // 是否已从 /api/modes 拉取（防止首次渲染未拿到的竞态）
-  let currentMode = 'work';             // 当前模式：用户态，从 localStorage `workbench-mode` 读；不影响服务端
-  // 当前模式是否只读（派生自 currentMode 对应的 mode 定义）；每次切换模式时重算
-  function isReadonlyMode() {
-    const m = MODES.modes.find((x) => x.id === currentMode);
-    return !!(m && m.readonly === true);
-  }
+  // 模式系统已抽到 wb-mode.js（顶部 const isReadonlyMode / modeMatches / modeLabel / renderModeTags 引入）
+  // 共享状态变量从 WB 初始化（首次加载 wb-mode.js 时已设默认）；每次修改同步写回 WB
+  let MODES = WB.MODES;
+  let MODES_LOADED = WB.MODES_LOADED;
+  let currentMode = WB.currentMode;
+  const isReadonlyMode = WB.isReadonlyMode;
+  const modeMatches = WB.modeMatches;
+  const modeLabel = WB.modeLabel;
+  const renderModeTags = WB.renderModeTags;
   let workbenchOnline = false;
 
   // ---- 系统信息卡定义 / 卡片图标 / 数字滚动动画 已抽到 wb-core.js（顶部 const SYS_CARDS = WB.SYS_CARDS 引入） ----
@@ -125,27 +117,7 @@
     try { localStorage.setItem(ORDER_KEY, JSON.stringify(order)); } catch (e) { /* 忽略 */ }
   }
 
-  // ---- 模式匹配：按钮 / 系统卡 / 书签 / RSS 订阅源 的 mode 字段判定是否在当前模式下可见 ----
-  // mode 字段语义（与 server.js normalizeModeField 保持一致）：
-  //   undefined / null                → 全部模式可见（默认；与 buttons.json 旧字段缺失行为一致）
-  //   'work' / 'entertainment' / 自定义模式 id（modes.json 定义） → 仅该模式可见
-  //   ['work','entertainment']        → 与不写等价（少见，显式声明）
-  //   '__hidden__'                     → 所有模式都不可见（v0.8 新增；用户在 UI 上点"隐藏"按钮）
-  // 校验：未知模式 id 在白名单外视为 null（防止 modes.json 改名后旧数据卡死）
-  function modeMatches(m) {
-    if (m === '__hidden__') return false;  // v0.8：hidden sentinel 永远不匹配（任何模式都不显示）
-    if (m == null) return true;
-    // 启动早期 / 网络失败 MODES_LOADED=false 时仍能匹配内置两个白名单（向后兼容）
-    const knownIds = MODES_LOADED ? MODES.modes.map((x) => x.id) : ['work', 'entertainment'];
-    if (Array.isArray(m)) {
-      // 数组中任一已知模式 === 当前模式即匹配（与 modes.json 同步白名单）
-      const valid = m.filter((x) => knownIds.includes(x));
-      return valid.includes(currentMode);
-    }
-    if (typeof m === 'string' && knownIds.includes(m)) return m === currentMode;
-    // 未知模式 id 视为 null（兜底：modes.json 改名后旧数据不卡死）
-    return true;
-  }
+  // ---- 模式匹配已抽到 wb-mode.js（顶部 const modeMatches = WB.modeMatches 引入） ----
 
   // ---- 卡片尺寸 ----
   function spanClass(size) {
@@ -1006,84 +978,7 @@
     metaEl.title = allTitles.slice(0, 10).join('、') + (allTitles.length > 10 ? '…' : '');
   }
 
-  // ---- 模式 multi-tag 组件（v5 feedback 2：UI 从单选 select 改为多选 checkbox；v0.8：全部→隐藏） ----
-  // currentMode 接受四态：null / undefined / []    → "全部模式可见"（无勾选，默认）
-  //                        字符串（非 __hidden__） → 仅该模式可见
-  //                        字符串数组              → 这些模式都可见
-  //                        '__hidden__'             → 所有模式都不显示（用户点"隐藏"按钮）
-  // onChange(newMode) 回调：null（全部）/ 字符串数组（被选模式）/ '__hidden__'（隐藏）
-  // 互斥：勾选"隐藏" = 清空所有具体模式；勾选任意具体模式 = 取消"隐藏"
-  // v0.8 视觉调整：checkbox input 完全隐藏（CSS），label 点击触发切换；.mode-tag.active 亮起即状态
-  // readonly 模式：整体 disable（不触发 onChange；调用方仍可批量改 metadata）
-  function renderModeTags(currentMode, onChange) {
-    const wrap = document.createElement('div');
-    wrap.className = 'mode-tags';
-    // v0.8：'__hidden__' 是与"具体模式"互斥的第四态
-    const isHidden = currentMode === '__hidden__';
-    const selected = new Set();
-    if (!isHidden && Array.isArray(currentMode)) {
-      currentMode.forEach((m) => { if (typeof m === 'string' && m !== '__hidden__') selected.add(m); });
-    } else if (!isHidden && typeof currentMode === 'string' && currentMode) {
-      selected.add(currentMode);
-    }
-    // null/空/缺省 → selected 为空 = 默认（全部模式可见）
-
-    // "隐藏"按钮：与具体模式互斥（v0.8 替代 v0.7 的"全部"按钮——用户原话"全部感觉就没用了，但是来一个隐藏还是有价值"）
-    const hiddenTag = document.createElement('label');
-    hiddenTag.className = 'mode-tag mode-tag-hidden' + (isHidden ? ' active' : '');
-    hiddenTag.innerHTML = '<input type="checkbox"' + (isHidden ? ' checked' : '') + '> <span>隐藏</span>';
-    hiddenTag.title = '勾上后此内容在所有模式下都不显示';
-    const hiddenCb = hiddenTag.querySelector('input');
-    hiddenCb.addEventListener('change', () => {
-      if (hiddenCb.checked) {
-        // 勾上"隐藏" → 清空所有具体模式勾选 + 设为 __hidden__
-        wrap.querySelectorAll('.mode-tag[data-mode-id]').forEach((el) => {
-          el.classList.remove('active');
-          const cb = el.querySelector('input');
-          if (cb) cb.checked = false;
-        });
-        onChange('__hidden__');
-      } else {
-        // 取消"隐藏" → 回到默认（全部模式可见）
-        onChange(null);
-      }
-    });
-    wrap.appendChild(hiddenTag);
-
-    // 具体模式按钮（保持不变）
-    for (const m of MODES.modes) {
-      const tag = document.createElement('label');
-      tag.className = 'mode-tag' + (selected.has(m.id) ? ' active' : '');
-      tag.dataset.modeId = m.id;
-      tag.title = (m.description || m.name) + (m.readonly ? '（只读模式）' : '');
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.checked = selected.has(m.id);
-      const label = document.createElement('span');
-      label.textContent = m.name;
-      tag.appendChild(cb);
-      tag.appendChild(label);
-      cb.addEventListener('change', () => {
-        // 勾选任意具体模式 → 取消"隐藏"勾选（互斥）
-        if (cb.checked) {
-          hiddenTag.classList.remove('active');
-          hiddenCb.checked = false;
-        }
-        tag.classList.toggle('active', cb.checked);
-        // 收敛：当前所有勾选 → 字符串数组
-        const checked = [...wrap.querySelectorAll('.mode-tag[data-mode-id] input:checked')]
-          .map((c) => c.parentElement.dataset.modeId);
-        onChange(checked.length ? checked : null);
-      });
-      wrap.appendChild(tag);
-    }
-    // readonly 模式：禁用所有勾选（CSS 视觉降级 + JS 拦截）
-    if (isReadonlyMode()) {
-      wrap.classList.add('locked');
-      wrap.querySelectorAll('input').forEach((cb) => { cb.disabled = true; });
-    }
-    return wrap;
-  }
+  // ---- 模式 multi-tag 组件已抽到 wb-mode.js（顶部 const renderModeTags = WB.renderModeTags 引入） ----
 
   // ---- RSS 信息卡渲染（每个源一个小标题 + 最新条目链接列表） ----
   function fmtRssDate(ts) {
@@ -1782,11 +1677,7 @@
     }
   }
 
-  // 模式 id → 中文标签（找不到回退 id 本身）
-  function modeLabel(id) {
-    const m = MODES.modes.find((x) => x.id === id);
-    return m ? m.name : id;
-  }
+  // 模式 id → 中文标签（找不到回退 id 本身）已抽到 wb-mode.js（顶部 const modeLabel = WB.modeLabel 引入）
 
   // ---- 书签拖拽排序（指针事件实现：按住书签项任意位置拖动，位移 >6px 进入拖拽；轻点 = 打开/删除）
   //      侧栏与书签卡（.bm-item）通用；排序基于完整书签数组计算 ----
@@ -2042,7 +1933,7 @@
     let m = localStorage.getItem(MODE_KEY);
     const knownIds = MODES_LOADED ? MODES.modes.map((x) => x.id) : ['work'];
     if (!knownIds.includes(m)) m = MODES_LOADED ? MODES.default : 'work';
-    currentMode = m;
+    currentMode = m; WB.currentMode = m;  // 双写：本地 + WB（wb-mode.js 也读 WB.currentMode）
     document.body.dataset.mode = currentMode;
     // 只读态：mode.readonly = true 时挂到 body[data-readonly]，CSS 据此降级所有编辑控件
     document.body.dataset.readonly = isReadonlyMode() ? 'true' : 'false';
@@ -2068,7 +1959,7 @@
     const knownIds = MODES_LOADED ? MODES.modes.map((x) => x.id) : ['work'];
     if (!knownIds.includes(v)) return;
     if (v === currentMode) return;
-    currentMode = v;
+    currentMode = v; WB.currentMode = v;  // 双写：本地 + WB
     localStorage.setItem(MODE_KEY, v);
     applyStyle();
     // 同步已有卡片的 drag-hint 显隐（keyed 缓存复用 DOM，初次渲染后不会自动重渲）
@@ -2971,8 +2862,8 @@
     try {
       const m = await fetchJSON('/api/modes');
       if (m && Array.isArray(m.modes) && m.modes.length) {
-        MODES = m;
-        MODES_LOADED = true;
+        MODES = m; WB.MODES = m;  // 双写：本地 + WB
+        MODES_LOADED = true; WB.MODES_LOADED = true;
       }
     } catch (e) { /* ignore：沿用 MODES 默认 */ }
     applyStyle();
