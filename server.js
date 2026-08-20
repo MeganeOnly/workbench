@@ -1176,7 +1176,7 @@ async function completeDidaTask(projectId, taskId) {
   }
 }
 
-// ---- Push 卡片流程：在 Anki 工作目录创建新对话并发送 "push" ----
+// ---- Push 卡片流程：在 Anki 工作目录创建新对话并发送 "push anki 卡片" ----
 const PUSH_LOCK_MS = 10 * 60 * 1000; // 锁定 10 分钟
 
 async function runPush() {
@@ -1210,7 +1210,7 @@ async function runPush() {
     const prompted = await callDshApi('session.prompt', {
       sessionId: sessionId,
       mode: 'queue',
-      content: [{ type: 'text', text: 'push' }],
+      content: [{ type: 'text', text: 'push anki 卡片' }],
     });
     recordPushTime();
     entry.status = 'done';

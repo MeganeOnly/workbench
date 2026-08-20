@@ -106,7 +106,7 @@
 点击"Push 卡片"后，工作台通过 dsh web 的本地 API（127.0.0.1:3080）执行两步：
 
 1. `session.create` — 在 `config.json` 的 `pushCwd` 目录创建一个全新对话
-2. `session.prompt` — 向该对话发送 `push`，触发 anki-card-push skill 流程
+2. `session.prompt` — 向该对话发送 `push anki 卡片`，触发 anki-card-push skill 流程
 
 完成后自动打开 DSH 页面，你会在会话列表顶部看到最新创建的 push 对话（状态为执行中）。每次点击都是全新对话，天然满足"一个对话最多三次、多了换新"的需求——每次 push 都是干净的上下文。
 
