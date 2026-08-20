@@ -1558,6 +1558,7 @@
   WB.refreshAllCardAddBtns = refreshAllCardAddBtns;
   WB.renderRssForReRender = renderRssForReRender;
   WB.showBookmarkLoadFailedBanner = showBookmarkLoadFailedBanner;
+  WB.openModal = openModal;
   WB.renderShortcutList = renderShortcutList;
   WB.renderModeManager = renderModeManager;
   WB.renderSidebarBookmarks = renderSidebarBookmarks;

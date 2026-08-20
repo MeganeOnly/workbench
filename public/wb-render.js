@@ -173,8 +173,8 @@
         }
       });
     } else if (id === 'sys-bookmarks') {
-      // readonly 模式不渲染卡片内的 + 添加按钮（add bookmark 由 CSS 兜底隐藏）
-      const addBtn = isReadonlyMode() ? '' : '<button class="add-btn" id="card-add-bookmark" title="添加书签">+</button>';
+      // 始终保留 + 按钮，readonly 模式只隐藏显示；切回娱乐模式时无需重建 keyed card
+      const addBtn = '<button class="add-btn" id="card-add-bookmark" title="添加书签">+</button>';
       el.innerHTML =
         '<div class="card-head"><h3><span class="card-icon"></span>书签</h3>' +
         addBtn + '</div>' +
@@ -182,10 +182,13 @@
         '<ul class="bm-card-list"></ul>';
       refs.list = el.querySelector('.bm-card-list');
       const cardAdd = el.querySelector('#card-add-bookmark');
-      if (cardAdd) cardAdd.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (WB.openModal) WB.openModal();
-      });
+      if (cardAdd) {
+        cardAdd.style.display = isReadonlyMode() ? 'none' : '';
+        cardAdd.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (WB.openModal) WB.openModal();
+        });
+      }
     } else if (id === 'sys-dida-today') {
       el.innerHTML =
         '<div class="card-head"><h3><span class="card-icon"></span>滴答今日任务</h3></div>' +

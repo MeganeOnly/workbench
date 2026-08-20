@@ -211,7 +211,29 @@ async function main() {
       fail('侧栏书签编辑按钮应可见');
     }
 
-    // 12) 切回 work 模式
+    // 12) 娱乐模式：书签卡 + 按钮应打开 modal
+    const addResult = await evalExpr(`(() => {
+      const card = document.querySelector('.card[data-id="sys-bookmarks"]');
+      const add = card && card.querySelector('#card-add-bookmark');
+      if (!add) return { ok: false, why: '未渲染书签卡 + 按钮' };
+      add.click();
+      const modal = document.getElementById('bookmark-modal');
+      return {
+        ok: typeof window.WB?.openModal === 'function' && !!modal && !modal.classList.contains('hidden') && document.getElementById('bm-modal-title')?.textContent === '添加书签',
+        bridge: typeof window.WB?.openModal === 'function',
+        modalOpen: !!modal && !modal.classList.contains('hidden'),
+        title: document.getElementById('bm-modal-title')?.textContent || null,
+      };
+    })()`);
+    const addData = addResult.result && addResult.result.result.value;
+    if (addData && addData.ok) {
+      pass('娱乐模式书签卡 + 按钮打开 modal', '跨模块入口可调用');
+    } else {
+      fail('娱乐模式书签卡 + 按钮应打开 modal', JSON.stringify(addData));
+    }
+    await evalExpr(`document.getElementById('bm-cancel')?.click()`);
+
+    // 13) 切回 work 模式
     await evalExpr(`(() => {
       const opt = document.querySelector('.mode-seg-opt[data-mode="work"]');
       if (opt) opt.click();
@@ -225,7 +247,7 @@ async function main() {
       fail('切回 work 模式应生效');
     }
 
-    // 13) localStorage 持久化
+    // 14) localStorage 持久化
     const ls = await evalExpr(`localStorage.getItem('workbench-mode')`);
     if (ls.result && ls.result.result.value === 'work') {
       pass('localStorage workbench-mode 持久化');
@@ -233,7 +255,7 @@ async function main() {
       fail('localStorage 持久化');
     }
 
-    // 14) 页面无 JS 异常
+    // 15) 页面无 JS 异常
     if (pageErrors.length === 0) {
       pass('页面无 JS 异常');
     } else {

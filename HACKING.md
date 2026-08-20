@@ -3,7 +3,7 @@
 > **本文件是工作台项目的快速上手入口。** 改代码前 5 分钟读这份 → 直接动手；遇到细节 → 跳 [`DEV.md`](./DEV.md) 对应章节。
 > 完整 API、机制详解、所有版本变更历史都在 DEV.md（53KB，本机专属）；本文件是入口与索引，不是替代。
 >
-> **上次更新**：2026-08-19（v1.2 前端拆分 + maintainability.md + 统一风格；完整变更历史见 `DEV.md §8`）
+> **上次更新**：2026-08-20（v1.2 前端拆分 + maintainability.md + 统一风格；补充书签跨模块入口回归说明）
 
 > **新概念**：mode 字段 4 态——`null` / `string` / `string[]` / `'__hidden__'`（v0.8 新增）；`__hidden__` 是 UI 上"隐藏"按钮对应的 sentinel，与具体模式互斥（content 在任何模式下都不显示）。
 >
@@ -113,6 +113,7 @@
 | 调整卡片顺序 / 主题 / 偏好 | **不**改代码——`localStorage` 持久化 | 浏览器本地，换浏览器或清缓存会重置 |
 | 想加"模式"维度（工作/娱乐） | `buttons.json` 加 `"mode": "entertainment"` | 已有实现，见 DEV §8 2026-08-17 条目；模式状态 localStorage `workbench-mode` |
 | 想加新模式（学习/通勤/专注） | `modes.json` 追加一条 `{id, name, icon, readonly}` | 已有实现，见 DEV §8 2026-08-17 v2 条目 + D031；前端切换器自动渲染，零代码改动 |
+| 书签卡“+”无反应 | `app.js` 将 `openModal` 桥接到 `WB.openModal`；`wb-render.js` 保留按钮并按 readonly 显隐 | 卡片渲染与 modal 实现跨文件，按钮监听必须走 `WB.xxx` 运行时桥接；切回可编辑模式后仍可打开添加弹窗 |
 | 想让书签 / RSS 源只出现在某模式 | 书签 modal / RSS 源添加表单选 mode；或直接改 `bookmarks.json` / `feeds.json` 加 `mode` 字段 | 已有实现；服务端 `normalizeModeField` 校验非法 mode id；旧数据自动补 `mode:null` |
 | 想让工作模式"只读" | `modes.json` 设 `readonly:true` | 已有实现：拖拽手柄不渲染、外观/布局/偏好/快捷方式/RSS 区 pointer-events:none、按钮执行不被锁 |
 | 编辑书签的 mode（创建后） | 侧栏 ✎ / 卡片墙 ✎ → modal 改 name/url/mode | v0.7 改为 multi-tag（v0.5 之前是 select 单选）；PATCH `/api/bookmarks/<id>` |
