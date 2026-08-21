@@ -696,6 +696,14 @@
 
   function applyStyle() {
     const theme = localStorage.getItem(THEME_KEY) || 'emerald';
+    // 模式：白名单校验（基于 MODES；启动早期 MODES_LOADED=false 时用内置默认 work）
+    // 必须先于 layout 读取——否则 init() 首次调用时 currentMode 还是 WB 默认值 'work'，
+    // 会拿 work 的 layout 写到 body，再更新 currentMode 也来不及（2026-08-22 真实 bug：
+    // 用户在 invest 模式选 grid 后刷新，看到的是 work 的 split-center 布局）
+    let m = localStorage.getItem(MODE_KEY);
+    const knownIds = MODES_LOADED ? MODES.modes.map((x) => x.id) : ['work'];
+    if (!knownIds.includes(m)) m = MODES_LOADED ? MODES.default : 'work';
+    currentMode = m; WB.currentMode = m;  // 双写：本地 + WB（wb-mode.js 也读 WB.currentMode）
     // 布局按当前 mode 取——切模式时自动应用该 mode 独立的 layout
     const layout = getLayoutForMode(currentMode);
     document.body.dataset.theme = theme;
@@ -706,11 +714,6 @@
       const el = document.getElementById(id);
       if (el) el.setAttribute('aria-checked', String(on));
     }
-    // 模式：白名单校验（基于 MODES；启动早期 MODES_LOADED=false 时用内置默认 work）
-    let m = localStorage.getItem(MODE_KEY);
-    const knownIds = MODES_LOADED ? MODES.modes.map((x) => x.id) : ['work'];
-    if (!knownIds.includes(m)) m = MODES_LOADED ? MODES.default : 'work';
-    currentMode = m; WB.currentMode = m;  // 双写：本地 + WB（wb-mode.js 也读 WB.currentMode）
     document.body.dataset.mode = currentMode;
     // 只读态：mode.readonly = true 时挂到 body[data-readonly]，CSS 据此降级所有编辑控件
     document.body.dataset.readonly = isReadonlyMode() ? 'true' : 'false';
