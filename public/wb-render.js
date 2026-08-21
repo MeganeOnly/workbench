@@ -1169,7 +1169,14 @@
   const MASONRY_GAP = 16;
   function applyMasonry() {
     const layout = document.body.dataset.layout || 'grid';
-    if (layout !== 'grid') return;
+    if (layout !== 'grid') {
+      // 清理之前 grid 布局设的 grid-row-end（split-center / list / split 布局下 main 也是
+      // display: grid，残留的 grid-row-end 仍生效 → 卡片高度被错误限制 → 布局错位）
+      for (const c of document.querySelectorAll('.card')) {
+        if (c.style.gridRowEnd) c.style.removeProperty('grid-row-end');
+      }
+      return;
+    }
     const cards = [...grid.querySelectorAll(':scope > .card')];
     if (!cards.length) return;
     grid.style.gridAutoRows = 'auto';
