@@ -1438,6 +1438,16 @@ body[data-layout="split-center"] .buttons-grid .card:not(.stat-card) {
 
 .modal-save:hover { background: var(--accent-deeper); }
 
+/* 删除按钮：左侧、视觉降级（per HACKING.md §3.5.4 "破坏性操作视觉降级"） */
+.modal-actions-spacer { flex: 1; }
+.modal-danger {
+  background: transparent;
+  color: var(--err);
+  border: 1px solid var(--err-soft);
+}
+.modal-danger:hover { background: var(--err-soft); }
+.modal-danger.hidden { display: none; }
+
 /* ============================================================
    响应式与动效克制
    ============================================================ */

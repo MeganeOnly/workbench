@@ -493,6 +493,7 @@
   const bmModeSelect = document.getElementById('bm-mode');
   const bmModalTitle = document.getElementById('bm-modal-title');
   const bmSaveBtn = document.getElementById('bm-save');
+  const bmDeleteBtn = document.getElementById('bm-delete');
   // 当前 modal 操作类型：null = 新增；否则 = 编辑的书签 id
   let bmEditId = null;
   // 当前 modal 选中的模式（null = 全部模式；字符串数组 = 这些模式可见）
@@ -509,6 +510,8 @@
     modal.dataset.editId = bmEditId || '';
     if (bmModalTitle) bmModalTitle.textContent = bmEditId ? '编辑书签' : '添加书签';
     if (bmSaveBtn) bmSaveBtn.textContent = bmEditId ? '保存修改' : '保存';
+    // 删除按钮仅编辑模式可见（新增无意义）
+    if (bmDeleteBtn) bmDeleteBtn.classList.toggle('hidden', !bmEditId);
     // 预填字段（编辑模式从 bookmarks 缓存读）
     let preset = null;
     if (bmEditId) {
@@ -533,6 +536,8 @@
     modal.classList.add('hidden');
     bmEditId = null;
     modal.dataset.editId = '';
+    // 删除按钮隐藏兜底（防止下次打开残留）
+    if (bmDeleteBtn) bmDeleteBtn.classList.add('hidden');
   }
 
   async function saveBookmark() {
@@ -573,9 +578,26 @@
     }
   }
 
+  // 删除当前编辑的书签（仅在编辑模式生效；按钮 hidden 类已在 openModal 中按 editId 切换）
+  async function deleteBookmarkFromModal() {
+    if (!bmEditId) return; // 兜底：新增模式不应触发
+    const preset = bookmarks.find((b) => b.id === bmEditId);
+    const name = preset ? preset.name : '';
+    if (!confirm('删除书签「' + name + '」？此操作不可撤销。')) return;
+    try {
+      await fetchJSON('/api/bookmarks/' + encodeURIComponent(bmEditId), { method: 'DELETE' });
+      closeModal();
+      refreshBookmarks();
+      if (WB.showToast) WB.showToast('已删除书签「' + name + '」', 'ok');
+    } catch (e) {
+      alert('删除失败: ' + e.message);
+    }
+  }
+
   addBtn.addEventListener('click', openModal);
   bmCancel.addEventListener('click', closeModal);
   bmSave.addEventListener('click', saveBookmark);
+  if (bmDeleteBtn) bmDeleteBtn.addEventListener('click', deleteBookmarkFromModal);
   modal.addEventListener('click', (e) => {
     if (e.target === modal) closeModal();
   });
