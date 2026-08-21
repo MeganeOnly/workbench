@@ -3,7 +3,7 @@
 > **本文件是工作台项目的快速上手入口。** 改代码前 5 分钟读这份 → 直接动手；遇到细节 → 跳 [`DEV.md`](./DEV.md) 对应章节。
 > 完整 API、机制详解、所有版本变更历史都在 DEV.md（53KB，本机专属）；本文件是入口与索引，不是替代。
 >
-> **上次更新**：2026-08-20（v1.2 前端拆分 + maintainability.md + 统一风格；补充书签跨模块入口回归说明）
+> **上次更新**：2026-08-21（v1.x 投资方案卡 5 张：4 公开 + 1 本机专属，新增通用 kind:'invest-info' 渲染 + JSON 数据文件）
 
 > **新概念**：mode 字段 4 态——`null` / `string` / `string[]` / `'__hidden__'`（v0.8 新增）；`__hidden__` 是 UI 上"隐藏"按钮对应的 sentinel，与具体模式互斥（content 在任何模式下都不显示）。
 >
@@ -126,6 +126,7 @@
 | 模式管理区按分类收起 | 设置面板「模式管理」5 个分组的标题行（v0.8 可点击 button；v1 新增系统卡组） | localStorage `workbench-fold-mmgr-{groupId}` 持久化；**5 个** groupId 固定：`bookmark` / `feed` / `shortcut` / `manual` / `syscard` |
 | 晚间统一推送 GitHub | 本机开发者约定，按各自 skill / 脚本走 | 自动 fetch + 分歧检测 + 敏感内容审计 + 列文件 + 默认确认 |
 | 调整 MiniMax 周限额 marker 样式 / 算法 / edge case | `public/wb-render.js` 的 `renderMiniMaxCard` + `formatResetIn` + `public/style.css` 的 `.mmx-bar-marker` 段 + `tests/test-minimax.mjs`（5 个 marker 断言 A/B/C/D/E + 2 个形状 A.5） | Ctrl+F5 | v0.9 算法（marker 周期用 `wweek.windowMinutes` 动态）+ v0.9.4 视觉（SVG 右括号 `)`，10×10 viewBox，path `M 5 0 Q 10 5, 5 10`）；位置/title/edge case 逻辑不变 |
+| 加静态信息卡（数据存 JSON 文件；如投资方案类） | 新建 `invest-xxx.json` + `server.js`（INVEST_FILES + `/api/invest/:id`）+ `public/wb-core.js`（SYS_CARDS 镜像 + CARD_ICONS）+ `public/wb-render.js`（`sys-invest-*` 通用分支 + renderInvestInfoCard helper）+ `public/style.css`（`.invest-info-*` 段） + `.gitignore`（个人专属 JSON） | 重启服务（仅 server.js 改时） | v1.x：5 张共用 `kind:'invest-info'` 通用渲染；JSON 文件可热改（Ctrl+F5 强刷内存缓存）；个人专属数据按 D050 隔离 |
 
 ---
 
