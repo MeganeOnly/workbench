@@ -19,6 +19,9 @@ push-state.json
 feeds.json
 syscards-state.json
 
+# 投资方案个人专属数据（用户自行创建；含个人财务画像，不随仓库分发）
+invest-personal.json
+
 # 自动生成的缓存与图标（换机后随「添加快捷方式」重新生成）
 favicons/
 public/icons/
