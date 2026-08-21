@@ -50,9 +50,8 @@
     return [...func,
       'sys-balance', 'sys-status', 'sys-dsh-sessions', 'sys-bookmarks',
       'sys-dida-today', 'sys-dida-focus', 'sys-minimax', 'sys-rss',
-      // 投资方案卡（顺序：总 → 子 → 个人专属）
-      'sys-invest-summary', 'sys-invest-portfolio', 'sys-invest-cadence',
-      'sys-invest-rules', 'sys-invest-personal',
+      // 投资方案卡（v1.x：计算器主卡 + 硬约束警示卡）
+      'sys-invest-calc', 'sys-invest-rules',
     ];
   }
 
@@ -260,8 +259,19 @@
         dragHint +
         '<div class="rss-list"></div>';
       refs.list = el.querySelector('.rss-list');
+    } else if (id === 'sys-invest-calc') {
+      // 投资计算器（v1.x）：目标 / 当前 / 偏差 / 状态判断 / 操作步骤
+      const def = SYS_CARDS[id];
+      const title = (def && def.name) || id;
+      el.innerHTML =
+        '<div class="card-head"><h3><span class="card-icon"></span><span class="card-title-text"></span></h3></div>' +
+        dragHint +
+        '<div class="invest-calc-body"><div class="invest-calc-loading">加载中...</div></div>';
+      refs.titleText = el.querySelector('.card-title-text');
+      refs.titleText.textContent = title;
+      refs.body = el.querySelector('.invest-calc-body');
     } else if (id.startsWith('sys-invest-')) {
-      // 投资方案卡通用模板：标题 + 容器 + sections 占位
+      // 投资方案卡通用模板（仅 sys-invest-rules 用）：标题 + 容器 + sections 占位
       const def = SYS_CARDS[id];
       const title = (def && def.name) || id;
       el.innerHTML =
@@ -498,6 +508,18 @@
       renderMiniMaxCard(refs);
     } else if (id === 'sys-rss') {
       renderRssList(refs.list);
+    } else if (id === 'sys-invest-calc') {
+      // 投资计算器：拉 /api/invest-calc → 渲染目标/当前/偏差/状态
+      // 不走 investCache（用户输入会改 holdings.json，需要实时读；fetchJSON 自带缓存语义不强）
+      fetchJSON('/api/invest-calc').then((resp) => {
+        if (!resp || !resp.ok || !resp.data) {
+          if (refs.body) refs.body.innerHTML = '<div class="invest-calc-empty">方案加载失败</div>';
+          return;
+        }
+        renderInvestCalculator(refs, resp.data);
+      }).catch(() => {
+        if (refs.body) refs.body.innerHTML = '<div class="invest-calc-empty">方案加载失败</div>';
+      });
     } else if (id.startsWith('sys-invest-')) {
       // 通用投资方案卡渲染：从服务端拉 JSON → 渲染 sections
       // 简单内存缓存：5 分钟内复用；用户修改 JSON 后 Ctrl+F5 强制刷新
@@ -559,6 +581,143 @@
   }
 
   WB.renderInvestInfoCard = renderInvestInfoCard;
+
+  // ===== 投资计算器渲染 =====
+  // data 形态：{ targets, rows:[{name,target,amount,currentPct,deviation}], total, status, actions, lastRebalance, nextCheck }
+  // status: 'ok' | 'threshold' | 'forced' | 'emergency'
+  // actions: [{type:'sell'|'buy', asset, amount}]
+  function renderInvestCalculator(refs, data) {
+    if (!refs || !refs.body) return;
+    const targets = data.targets || {};
+    const rows = data.rows || [];
+    const total = data.total || 0;
+    const status = data.status || 'ok';
+    const actions = data.actions || [];
+    const lastRebalance = data.lastRebalance || null;
+    const nextCheck = data.nextCheck || null;
+    // 资产顺序：data.rows 已经按 targets 顺序排好
+    // 1. 目标权重表
+    const targetsHtml = '<div class="invest-calc-section">' +
+      '<div class="invest-calc-section-title">目标权重</div>' +
+      '<table class="invest-calc-table">' +
+        rows.map((r) => '<tr><th>' + escapeHtml(r.name) + '</th><td class="invest-calc-pct">' + r.target + '%</td></tr>').join('') +
+      '</table></div>';
+    // 2. 当前持仓输入（4 个 input）
+    const inputsHtml = '<div class="invest-calc-section">' +
+      '<div class="invest-calc-section-title">当前持仓（输入金额 ¥）</div>' +
+      '<table class="invest-calc-table">' +
+        rows.map((r, i) => '<tr><th>' + escapeHtml(r.name) + '</th>' +
+          '<td><input type="number" min="0" step="100" class="invest-calc-input" data-asset="' + escapeHtml(r.name) + '" value="' + (r.amount || 0) + '" /></td></tr>').join('') +
+      '</table>' +
+      '<div class="invest-calc-actions-row">' +
+        '<span class="invest-calc-total">总市值 ¥' + total.toLocaleString() + '</span>' +
+        '<button class="invest-calc-save">保存</button>' +
+      '</div></div>';
+    // 3. 当前占比 vs 目标（带偏差色码）
+    let statusBadge = '';
+    if (status === 'emergency') statusBadge = 'danger-strong';
+    else if (status === 'forced') statusBadge = 'warn-strong';
+    else if (status === 'threshold') statusBadge = 'warn';
+    const currentHtml = '<div class="invest-calc-section">' +
+      '<div class="invest-calc-section-title">当前占比 vs 目标</div>' +
+      (total > 0
+        ? '<table class="invest-calc-table"><thead><tr><th></th><th>当前</th><th>目标</th><th>偏差</th></tr></thead><tbody>' +
+            rows.map((r) => {
+              const dev = r.deviation || 0;
+              let devClass = '';
+              if (Math.abs(dev) > 10) devClass = 'invest-calc-dev-danger';
+              else if (Math.abs(dev) > 5) devClass = 'invest-calc-dev-warn';
+              else devClass = 'invest-calc-dev-ok';
+              return '<tr><th>' + escapeHtml(r.name) + '</th>' +
+                '<td>' + r.currentPct + '%</td>' +
+                '<td>' + r.target + '%</td>' +
+                '<td class="' + devClass + '">' + (dev > 0 ? '+' : '') + dev + '%</td></tr>';
+            }).join('') + '</tbody></table>'
+        : '<div class="invest-calc-empty">请输入持仓金额开始计算</div>') +
+      '</div>';
+    // 4. 状态判断 + 操作步骤
+    let statusHtml = '';
+    if (status === 'ok') {
+      statusHtml = '<div class="invest-calc-status invest-calc-status-ok">✓ 当前比例在 ±5% 阈值内，无需再平衡</div>';
+    } else if (status === 'threshold') {
+      statusHtml = '<div class="invest-calc-status invest-calc-status-warn">' +
+        '⚠ 触发季度再平衡阈值，操作建议：</div>' +
+        '<ol class="invest-calc-actions">' +
+          actions.map((a) => {
+            const verb = a.type === 'sell' ? '卖出' : '买入';
+            return '<li>' + verb + ' <strong>' + escapeHtml(a.asset) + '</strong> ¥' + a.amount.toLocaleString() + '</li>';
+          }).join('') +
+        '</ol>' +
+        '<div class="invest-calc-tip">优先用新增定投款调节；不够时才卖出超配的、买入低配的；A 股两只内部可互相转换免申购费</div>';
+    } else if (status === 'forced') {
+      statusHtml = '<div class="invest-calc-status invest-calc-status-warn-strong">' +
+        '📅 距上次再平衡已满 6 个月，强制再平衡，操作建议：</div>' +
+        '<ol class="invest-calc-actions">' +
+          actions.map((a) => {
+            const verb = a.type === 'sell' ? '卖出' : '买入';
+            return '<li>' + verb + ' <strong>' + escapeHtml(a.asset) + '</strong> ¥' + a.amount.toLocaleString() + '</li>';
+          }).join('') +
+        '</ol>';
+    } else if (status === 'emergency') {
+      statusHtml = '<div class="invest-calc-status invest-calc-status-danger">' +
+        '⛔ 任一标的偏离 ±10%，立即再平衡：</div>' +
+        '<ol class="invest-calc-actions">' +
+          actions.map((a) => {
+            const verb = a.type === 'sell' ? '卖出' : '买入';
+            return '<li>' + verb + ' <strong>' + escapeHtml(a.asset) + '</strong> ¥' + a.amount.toLocaleString() + '</li>';
+          }).join('') +
+        '</ol>';
+    }
+    // 5. lastRebalance + 标记按钮
+    const lastRebHtml = '<div class="invest-calc-section invest-calc-rebalance-row">' +
+      '<span>上次再平衡：' + (lastRebalance || '未记录') + (nextCheck ? '（下次检查 ' + nextCheck + '）' : '') + '</span>' +
+      '<button class="invest-calc-rebalanced">标记已再平衡</button>' +
+      '</div>';
+    refs.body.innerHTML = targetsHtml + inputsHtml + currentHtml + statusHtml + lastRebHtml;
+    // 6. 绑定交互
+    const saveBtn = refs.body.querySelector('.invest-calc-save');
+    if (saveBtn) {
+      saveBtn.addEventListener('click', async () => {
+        const holdings = {};
+        refs.body.querySelectorAll('.invest-calc-input').forEach((el) => {
+          holdings[el.dataset.asset] = Math.max(0, Number(el.value) || 0);
+        });
+        try {
+          const r = await fetchJSON('/api/invest-calc/holdings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ holdings }),
+          });
+          if (r && r.ok) {
+            if (WB.showToast) WB.showToast('已保存当前持仓', 'ok');
+            WB.renderSystemCard('sys-invest-calc');
+          } else {
+            if (WB.showToast) WB.showToast('保存失败: ' + (r && r.error || '未知错误'), 'err');
+          }
+        } catch (e) {
+          if (WB.showToast) WB.showToast('保存失败: ' + e.message, 'err');
+        }
+      });
+    }
+    const rebalancedBtn = refs.body.querySelector('.invest-calc-rebalanced');
+    if (rebalancedBtn) {
+      rebalancedBtn.addEventListener('click', async () => {
+        try {
+          const r = await fetchJSON('/api/invest-calc/rebalanced', { method: 'POST' });
+          if (r && r.ok) {
+            if (WB.showToast) WB.showToast('已标记再平衡：' + r.lastRebalance, 'ok');
+            WB.renderSystemCard('sys-invest-calc');
+          } else {
+            if (WB.showToast) WB.showToast('标记失败: ' + (r && r.error || '未知错误'), 'err');
+          }
+        } catch (e) {
+          if (WB.showToast) WB.showToast('标记失败: ' + e.message, 'err');
+        }
+      });
+    }
+  }
+
+  WB.renderInvestCalculator = renderInvestCalculator;
 
   // 简易 HTML 转义（方案 JSON 是本机受信任文件，但渲染仍按习惯转义防 XSS）
   function escapeHtml(s) {

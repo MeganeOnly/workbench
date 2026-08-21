@@ -2847,3 +2847,192 @@ body[data-sidebar="off"] .expand-sidebar { display: none !important; }
   font-size: 12px;
   padding-left: 12px !important;
 }
+
+/* ============================================================
+   投资计算器（v1.x：sys-invest-calc，1 张可交互卡）
+   设计原则：直接指明怎么做（操作步骤）+ 偏差色码（绿/琥珀/红）
+   ============================================================ */
+.invest-calc-body {
+  padding: 0 4px 4px;
+  max-height: 540px;        /* 比 invest-info 高（计算器内容多） */
+  overflow-y: auto;
+}
+.invest-calc-loading,
+.invest-calc-empty {
+  padding: 20px 12px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 13px;
+}
+.invest-calc-empty { font-style: italic; }
+.invest-calc-section {
+  margin-bottom: 14px;
+}
+.invest-calc-section:last-child { margin-bottom: 0; }
+.invest-calc-section-title {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin: 6px 0 6px;
+  padding-left: 6px;
+  border-left: 3px solid var(--accent);
+}
+.invest-calc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.invest-calc-table tr {
+  border-bottom: 1px solid var(--border);
+}
+.invest-calc-table tr:last-child { border-bottom: none; }
+.invest-calc-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-3);
+  padding: 6px 8px 6px 0;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.invest-calc-table td {
+  padding: 6px 0;
+  color: var(--text);
+  vertical-align: middle;
+}
+.invest-calc-table thead th {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+  border-bottom: 1px solid var(--border-strong);
+}
+.invest-calc-pct {
+  font-family: var(--font-num);
+  font-weight: 600;
+  color: var(--accent-deep);
+}
+.invest-calc-input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-input);
+  font-family: var(--font-num);
+  font-size: 13px;
+  color: var(--text);
+  outline: none;
+  background: var(--surface);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.invest-calc-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+.invest-calc-actions-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+  gap: 10px;
+}
+.invest-calc-total {
+  font-family: var(--font-num);
+  font-size: 12px;
+  color: var(--text-3);
+}
+.invest-calc-save {
+  background: var(--accent-deep);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-btn);
+  padding: 6px 14px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s ease;
+}
+.invest-calc-save:hover { background: var(--accent-deeper); }
+/* 偏差色码（绿 ≤5% / 琥珀 5-10% / 红 >10%）*/
+.invest-calc-dev-ok    { color: var(--ok);   font-family: var(--font-num); font-weight: 600; }
+.invest-calc-dev-warn  { color: var(--warn); font-family: var(--font-num); font-weight: 600; }
+.invest-calc-dev-danger{ color: var(--err);  font-family: var(--font-num); font-weight: 600; }
+/* 状态判断区（与色码一致的语义）*/
+.invest-calc-status {
+  padding: 8px 10px;
+  border-radius: var(--radius-input);
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.invest-calc-status-ok {
+  background: var(--accent-soft);
+  color: var(--accent-deeper);
+  border-left: 3px solid var(--ok);
+}
+.invest-calc-status-warn {
+  background: rgba(180, 83, 9, 0.08);   /* var(--warn) soft 琥珀 */
+  color: var(--warn);
+  border-left: 3px solid var(--warn);
+}
+.invest-calc-status-warn-strong {
+  background: rgba(180, 83, 9, 0.14);
+  color: var(--warn);
+  border-left: 3px solid var(--warn);
+  font-weight: 600;
+}
+.invest-calc-status-danger {
+  background: var(--err-soft);
+  color: var(--err);
+  border-left: 3px solid var(--err);
+  font-weight: 600;
+}
+.invest-calc-actions {
+  margin: 6px 0 8px;
+  padding-left: 24px;
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.6;
+}
+.invest-calc-actions li {
+  padding: 2px 0;
+}
+.invest-calc-actions strong {
+  font-family: var(--font-body);
+  color: var(--accent-deep);
+  font-weight: 600;
+}
+.invest-calc-tip {
+  font-size: 12px;
+  color: var(--text-3);
+  font-style: italic;
+  margin-top: 4px;
+  padding-left: 4px;
+}
+.invest-calc-rebalance-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-3);
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.invest-calc-rebalanced {
+  background: transparent;
+  color: var(--text-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-btn);
+  padding: 4px 12px;
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.invest-calc-rebalanced:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
