@@ -478,12 +478,9 @@ const SYS_CARDS_WHITELIST = [
   'sys-dida-focus',
   'sys-minimax',
   'sys-rss',
-  // 投资方案卡（4 公开 + 1 本机专属；invest-personal.json 不入库，见 .gitignore）
-  'sys-invest-summary',
-  'sys-invest-portfolio',
-  'sys-invest-cadence',
+  // 投资方案卡（v1.x 重做后：1 个计算器 + 1 个硬约束；portfolio/cadence/personal/summary 已被计算器取代）
+  'sys-invest-calc',
   'sys-invest-rules',
-  'sys-invest-personal',
 ];
 // 系统卡的展示名（与 app.js SYS_CARDS.name 对齐；用于模式管理区行展示）
 const SYS_CARD_DISPLAY_NAMES = {
@@ -495,17 +492,12 @@ const SYS_CARD_DISPLAY_NAMES = {
   'sys-dida-focus':   '滴答专注',
   'sys-minimax':      'MiniMax 套餐',
   'sys-rss':          'RSS 订阅',
-  'sys-invest-summary':   '投资方案摘要',
-  'sys-invest-portfolio': '标的与权重',
-  'sys-invest-cadence':   '节奏与再平衡',
+  'sys-invest-calc':      '投资计算器',
   'sys-invest-rules':     '硬约束',
-  'sys-invest-personal':  '我的专属权重',
 };
 // 投资方案卡数据文件映射（id → JSON 文件名；白名单 + 固定文件名双重防路径遍历）
+// v1.x 重做后只剩「硬约束」卡用文件渲染 + 「我的专属权重」作为计算器的 targets 配置源（不渲染）
 const INVEST_FILES = {
-  'sys-invest-summary':   'invest-summary.json',
-  'sys-invest-portfolio': 'invest-portfolio.json',
-  'sys-invest-cadence':   'invest-cadence.json',
   'sys-invest-rules':     'invest-rules.json',
   'sys-invest-personal':  'invest-personal.json',
 };
