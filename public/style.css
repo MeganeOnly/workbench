@@ -2700,7 +2700,7 @@ body[data-sidebar="off"] .expand-sidebar { display: none !important; }
 .mode-manager-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   padding: 4px 6px;
   border-radius: 6px;
   transition: background .12s ease;
@@ -2725,7 +2725,7 @@ body[data-sidebar="off"] .expand-sidebar { display: none !important; }
 }
 .mode-manager-name {
   flex: none;
-  width: 110px;
+  width: 92px;
   font-size: 12px;
   font-weight: 500;
   color: var(--text);
@@ -2739,9 +2739,15 @@ body[data-sidebar="off"] .expand-sidebar { display: none !important; }
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 3px;
   font-size: 11px;
   color: var(--text-3);
+}
+/* 模式管理区专用紧凑 tag（4 个 mode + hidden 单行不换行；不影响 .mode-tag 在 modal / 快捷方式列表的复用） */
+.mode-manager-tags .mode-tag {
+  padding: 2px 6px;
+  gap: 3px;
+  font-size: 11px;
 }
 .mode-manager-tags.readonly {
   font-style: italic;
