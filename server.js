@@ -405,6 +405,12 @@ const SYS_CARDS_WHITELIST = [
   'sys-dida-focus',
   'sys-minimax',
   'sys-rss',
+  // 投资方案卡（4 公开 + 1 本机专属；invest-personal.json 不入库，见 .gitignore）
+  'sys-invest-summary',
+  'sys-invest-portfolio',
+  'sys-invest-cadence',
+  'sys-invest-rules',
+  'sys-invest-personal',
 ];
 // 系统卡的展示名（与 app.js SYS_CARDS.name 对齐；用于模式管理区行展示）
 const SYS_CARD_DISPLAY_NAMES = {
@@ -416,6 +422,19 @@ const SYS_CARD_DISPLAY_NAMES = {
   'sys-dida-focus':   '滴答专注',
   'sys-minimax':      'MiniMax 套餐',
   'sys-rss':          'RSS 订阅',
+  'sys-invest-summary':   '投资方案摘要',
+  'sys-invest-portfolio': '标的与权重',
+  'sys-invest-cadence':   '节奏与再平衡',
+  'sys-invest-rules':     '硬约束',
+  'sys-invest-personal':  '我的专属权重',
+};
+// 投资方案卡数据文件映射（id → JSON 文件名；白名单 + 固定文件名双重防路径遍历）
+const INVEST_FILES = {
+  'sys-invest-summary':   'invest-summary.json',
+  'sys-invest-portfolio': 'invest-portfolio.json',
+  'sys-invest-cadence':   'invest-cadence.json',
+  'sys-invest-rules':     'invest-rules.json',
+  'sys-invest-personal':  'invest-personal.json',
 };
 let syscardModes = {};  // id -> normalizeModeField 后的 mode 字段（启动时从文件读；旧数据缺省视为 null）
 try {
@@ -1832,6 +1851,26 @@ const server = http.createServer(async (req, res) => {
       return json(res, { ok: true, card: { id, mode: syscardModes[id] } });
     } catch (e) {
       return json(res, { ok: false, error: '请求格式错误: ' + e.message }, 400);
+    }
+  }
+
+  // 投资方案卡数据：GET /api/invest/:id → 读取对应 JSON 返回
+  // id 仅接受 INVEST_FILES 白名单；缺失文件返回 _missing:true（前端显示占位文案），不报错
+  if (p.startsWith('/api/invest/') && req.method === 'GET') {
+    const id = decodeURIComponent(p.slice('/api/invest/'.length));
+    if (!INVEST_FILES[id]) {
+      return json(res, { ok: false, error: '未知的投资卡: ' + id }, 400);
+    }
+    const filePath = path.join(ROOT, INVEST_FILES[id]);
+    if (!fs.existsSync(filePath)) {
+      return json(res, { ok: true, data: { sections: [], _missing: true } });
+    }
+    try {
+      const raw = fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, '');
+      const data = JSON.parse(raw);
+      return json(res, { ok: true, data });
+    } catch (e) {
+      return json(res, { ok: false, error: '方案文件解析失败' }, 500);
     }
   }
 
