@@ -2748,3 +2748,86 @@ body[data-sidebar="off"] .expand-sidebar { display: none !important; }
   color: var(--text-3);
   padding: 3px 8px;
 }
+
+/* ============================================================
+   投资方案卡（v1.x 5 张共用 kind:'invest-info'）
+   ============================================================ */
+.invest-info-body {
+  padding: 0 4px 4px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+.invest-info-loading,
+.invest-info-empty {
+  padding: 20px 12px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 13px;
+}
+.invest-info-empty {
+  font-style: italic;
+}
+.invest-section {
+  margin-bottom: 14px;
+}
+.invest-section:last-child {
+  margin-bottom: 0;
+}
+.invest-section-title {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin: 4px 0 6px;
+  padding-left: 6px;
+  border-left: 3px solid var(--accent);
+}
+.invest-section-lines {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+}
+.invest-section-lines li {
+  padding: 3px 0 3px 14px;
+  position: relative;
+}
+.invest-section-lines li::before {
+  content: "·";
+  position: absolute;
+  left: 4px;
+  color: var(--accent);
+  font-weight: 700;
+}
+.invest-section-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.invest-section-table tr {
+  border-bottom: 1px solid var(--border);
+}
+.invest-section-table tr:last-child {
+  border-bottom: none;
+}
+.invest-section-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-3);
+  padding: 6px 8px 6px 0;
+  white-space: nowrap;
+  vertical-align: top;
+  width: 1%;
+}
+.invest-section-table td {
+  padding: 6px 0;
+  color: var(--text);
+  vertical-align: top;
+}
+.invest-note-cell {
+  color: var(--text-3);
+  font-size: 12px;
+  padding-left: 12px !important;
+}

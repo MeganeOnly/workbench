@@ -40,6 +40,12 @@
     'sys-dida-focus':{ id: 'sys-dida-focus', name: '滴答专注',     size: 'small', kind: 'stat' },
     'sys-minimax':   { id: 'sys-minimax',   name: 'MiniMax 套餐',  size: 'wide',  kind: 'minimax' },
     'sys-rss':       { id: 'sys-rss',       name: 'RSS 订阅',      size: 'wide',  kind: 'rss' },
+    // 投资方案卡（4 公开 + 1 本机专属；通用 kind 共用同一渲染分支）
+    'sys-invest-summary':   { id: 'sys-invest-summary',   name: '投资方案摘要', size: 'wide',  kind: 'invest-info' },
+    'sys-invest-portfolio': { id: 'sys-invest-portfolio', name: '标的与权重',   size: 'wide',  kind: 'invest-info' },
+    'sys-invest-cadence':   { id: 'sys-invest-cadence',   name: '节奏与再平衡', size: 'wide',  kind: 'invest-info' },
+    'sys-invest-rules':     { id: 'sys-invest-rules',     name: '硬约束',       size: 'small', kind: 'invest-info' },
+    'sys-invest-personal':  { id: 'sys-invest-personal',  name: '我的专属权重', size: 'small', kind: 'invest-info' },
   };
 
   // ===== 卡片图标 =====
@@ -60,6 +66,12 @@
     'sys-dsh-sessions': '◉',
     'sys-minimax': 'Ⓜ',
     'sys-rss': '≡',
+    // 投资方案卡（避免与已有重复）
+    'sys-invest-summary':   '∑',
+    'sys-invest-portfolio': '⊞',
+    'sys-invest-cadence':   '↻',
+    'sys-invest-rules':     '⚠',
+    'sys-invest-personal':  '◈',
   };
 
   // ---- 卡片图标：按钮带 icon 字段（服务端检测 public/icons/<id>.ico 是否存在后返回）

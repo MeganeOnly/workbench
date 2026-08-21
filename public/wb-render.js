@@ -47,7 +47,13 @@
 
   function defaultOrder() {
     const func = (WB.buttons || []).map((b) => b.id);
-    return [...func, 'sys-balance', 'sys-status', 'sys-dsh-sessions', 'sys-bookmarks', 'sys-dida-today', 'sys-dida-focus', 'sys-minimax', 'sys-rss'];
+    return [...func,
+      'sys-balance', 'sys-status', 'sys-dsh-sessions', 'sys-bookmarks',
+      'sys-dida-today', 'sys-dida-focus', 'sys-minimax', 'sys-rss',
+      // 投资方案卡（顺序：总 → 子 → 个人专属）
+      'sys-invest-summary', 'sys-invest-portfolio', 'sys-invest-cadence',
+      'sys-invest-rules', 'sys-invest-personal',
+    ];
   }
 
   function getOrder() {
@@ -254,6 +260,17 @@
         dragHint +
         '<div class="rss-list"></div>';
       refs.list = el.querySelector('.rss-list');
+    } else if (id.startsWith('sys-invest-')) {
+      // 投资方案卡通用模板：标题 + 容器 + sections 占位
+      const def = SYS_CARDS[id];
+      const title = (def && def.name) || id;
+      el.innerHTML =
+        '<div class="card-head"><h3><span class="card-icon"></span><span class="card-title-text"></span></h3></div>' +
+        dragHint +
+        '<div class="invest-info-body"><div class="invest-info-loading">加载中...</div></div>';
+      refs.titleText = el.querySelector('.card-title-text');
+      refs.titleText.textContent = title;
+      refs.body = el.querySelector('.invest-info-body');
     }
     applyCardIcon(el.querySelector('.card-icon'), { id });
     const rec = { el, refs, current: null };
@@ -481,7 +498,73 @@
       renderMiniMaxCard(refs);
     } else if (id === 'sys-rss') {
       renderRssList(refs.list);
+    } else if (id.startsWith('sys-invest-')) {
+      // 通用投资方案卡渲染：从服务端拉 JSON → 渲染 sections
+      // 简单内存缓存：5 分钟内复用；用户修改 JSON 后 Ctrl+F5 强制刷新
+      const cached = WB.investCache && WB.investCache[id];
+      if (cached && (Date.now() - cached.ts) < 5 * 60 * 1000) {
+        renderInvestInfoCard(refs, cached.data);
+        return;
+      }
+      fetchJSON('/api/invest/' + id).then((resp) => {
+        if (!resp || !resp.ok) {
+          if (refs.body) refs.body.innerHTML = '<div class="invest-info-empty">方案加载失败</div>';
+          return;
+        }
+        if (!WB.investCache) WB.investCache = {};
+        WB.investCache[id] = { ts: Date.now(), data: resp.data };
+        renderInvestInfoCard(refs, resp.data);
+      }).catch(() => {
+        if (refs.body) refs.body.innerHTML = '<div class="invest-info-empty">方案加载失败</div>';
+      });
     }
+  }
+
+  // ===== 投资方案卡通用渲染 =====
+  // sections 每条支持两种形态：lines（项目列表）或 table（键值对表格；含可选 note 列）
+  function renderInvestInfoCard(refs, data) {
+    if (!refs || !refs.body) return;
+    if (data && data._missing) {
+      refs.body.innerHTML = '<div class="invest-info-empty">方案文件缺失，请联系维护者创建对应的 JSON 数据文件</div>';
+      return;
+    }
+    const sections = (data && data.sections) || [];
+    if (!sections.length) {
+      refs.body.innerHTML = '<div class="invest-info-empty">方案内容为空</div>';
+      return;
+    }
+    const html = sections.map((sec) => {
+      const title = sec.title
+        ? '<div class="invest-section-title">' + escapeHtml(sec.title) + '</div>'
+        : '';
+      let body = '';
+      if (Array.isArray(sec.lines) && sec.lines.length) {
+        body = '<ul class="invest-section-lines">' +
+          sec.lines.map((line) => '<li>' + escapeHtml(line) + '</li>').join('') +
+          '</ul>';
+      }
+      if (Array.isArray(sec.table) && sec.table.length) {
+        body += '<table class="invest-section-table"><tbody>' +
+          sec.table.map((row) => {
+            const label = '<th scope="row">' + escapeHtml(row.label || '') + '</th>';
+            const value = '<td>' + escapeHtml(row.value || '') + '</td>';
+            const note = row.note ? '<td class="invest-note-cell">' + escapeHtml(row.note) + '</td>' : '';
+            return '<tr>' + label + value + note + '</tr>';
+          }).join('') +
+          '</tbody></table>';
+      }
+      return '<div class="invest-section">' + title + body + '</div>';
+    }).join('');
+    refs.body.innerHTML = html;
+  }
+
+  WB.renderInvestInfoCard = renderInvestInfoCard;
+
+  // 简易 HTML 转义（方案 JSON 是本机受信任文件，但渲染仍按习惯转义防 XSS）
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
   }
 
   WB.renderSystemCard = renderSystemCard;
