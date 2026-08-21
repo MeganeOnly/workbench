@@ -92,7 +92,7 @@
       c.classList.remove('dragging', 'drag-over');
     });
     pDrag = null;
-    dragActive = false;
+    WB.dragActive = false;
     document.body.style.userSelect = '';
     WB.renderGrid(); // 按当前顺序恢复卡片到原位
   }
@@ -119,7 +119,7 @@
     if (!pDrag.active) {
       if (dx * dx + dy * dy <= 36) return; // 6px 阈值内视为点击
       pDrag.active = true;
-      dragActive = true;
+      WB.dragActive = true;
       // 幽灵跟随：卡片脱离网格，fixed 跟随光标（pointer-events:none 保证落点检测正常）
       const el = pDrag.el;
       const rect = el.getBoundingClientRect();
