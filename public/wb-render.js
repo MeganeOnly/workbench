@@ -1170,8 +1170,12 @@
   function applyMasonry() {
     const layout = document.body.dataset.layout || 'grid';
     if (layout !== 'grid') {
-      // 清理之前 grid 布局设的 grid-row-end（split-center / list / split 布局下 main 也是
-      // display: grid，残留的 grid-row-end 仍生效 → 卡片高度被错误限制 → 布局错位）
+      // 清理之前 grid 布局设的残留内联样式：
+      //   - grid.style.gridAutoRows (grid 容器行高单位 '10px')：split-center 下
+      //     .buttons-grid 也是 grid 容器, 残留强制行高 10px → 卡片溢出/重叠
+      //   - c.style.gridRowEnd (每卡行跨度): split-center / list / split 布局下 main
+      //     也是 display: grid, 残留会限制卡片高度 → 布局错位
+      if (grid.style.gridAutoRows) grid.style.removeProperty('grid-auto-rows');
       for (const c of document.querySelectorAll('.card')) {
         if (c.style.gridRowEnd) c.style.removeProperty('grid-row-end');
       }
