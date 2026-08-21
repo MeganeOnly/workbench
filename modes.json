@@ -14,6 +14,13 @@
             "icon": "▶",
             "readonly": false,
             "description": "娱乐/放松模式，可自由编辑"
+        },
+        {
+            "id": "invest",
+            "name": "投资",
+            "icon": "$",
+            "readonly": false,
+            "description": "投资模式，只显示 5 张投资方案卡（摘要 / 标的权重 / 节奏再平衡 / 硬约束 / 我的专属）"
         }
     ]
 }
