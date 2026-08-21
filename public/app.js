@@ -1353,16 +1353,17 @@
         onChange: (newMode) => patchButton(b.id, newMode),
       }))));
     }
-    // 分组 4：手动配置按钮（不可编辑——按钮无 UI 模式编辑入口，提示用户改 buttons.json）
-    const manualButtons = buttons.filter((b) => !b.auto && b.command && !b.toggle && !b.kind);
+    // 分组 4：手动配置按钮（inline 编辑走 /api/buttons/update）
+    // 包含 push / dida 等特殊 kind 的卡——它们没有 command 但有 kind；UI 编辑 mode 一致
+    const manualButtons = buttons.filter((b) => !b.auto && !b.toggle && (b.command || b.kind));
     if (manualButtons.length > 0) {
-      root.appendChild(renderModeManagerGroup('manual', '手动配置按钮（mode 字段需改 buttons.json）', manualButtons.map((b) => ({
+      root.appendChild(renderModeManagerGroup('manual', '功能按钮（手动）', manualButtons.map((b) => ({
         key: 'btn:' + b.id,
         icon: '⚙',
         name: b.name,
         title: b.description || '',
         mode: b.mode,
-        onChange: null, // 标记为只读
+        onChange: (newMode) => patchButton(b.id, newMode),
       }))));
     }
     // 分组 5：系统卡（v1 新增：SYS_CARDS 内置 8 张信息卡也能选模式）
