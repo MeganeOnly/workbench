@@ -622,7 +622,13 @@
 
   // ---- 样式设置（主题 + 布局 + 偏好开关，localStorage 持久化） ----
   const THEME_KEY = 'workbench-theme';
-  const LAYOUT_KEY = 'workbench-layout';
+  const LAYOUT_KEY = 'workbench-layout';   // 旧 key：全局 layout 存储；新机制下不再写入，读取保留兼容
+  const LAYOUT_BY_MODE_KEY = 'workbench-layout-by-mode';   // 新 key：每 mode 独立 layout；切模式自动应用
+  const DEFAULT_LAYOUT_BY_MODE = {
+    work: 'split-center',   // 工作模式：任务居中布局（聚焦今日任务）
+    entertainment: 'grid',  // 娱乐模式：网格布局（自由浏览）
+    invest: 'grid',         // 投资模式：网格布局（投资方案卡片用 wide + small 自然排列）
+  };
   const SIDEBAR_KEY = 'workbench-sidebar';
   const BIGNUM_KEY = 'workbench-bignum';
   const COUNTUP_KEY = 'workbench-countup';
@@ -642,9 +648,34 @@
     'rss-switch': RSS_KEY,
   };
 
+  function getLayoutForMode(mode) {
+    // 优先读 mode 专属 layout；缺省回退硬编码默认值（保证首次切到新 mode 也有合理布局）
+    try {
+      const raw = localStorage.getItem(LAYOUT_BY_MODE_KEY);
+      if (raw) {
+        const map = JSON.parse(raw);
+        if (map && typeof map[mode] === 'string') return map[mode];
+      }
+    } catch (e) { /* 损坏回退默认 */ }
+    return DEFAULT_LAYOUT_BY_MODE[mode] || 'grid';
+  }
+
+  function setLayoutForMode(mode, layout) {
+    let map = {};
+    try {
+      const raw = localStorage.getItem(LAYOUT_BY_MODE_KEY);
+      if (raw) map = JSON.parse(raw) || {};
+    } catch (e) { /* 损坏视为空 */ }
+    map[mode] = layout;
+    try {
+      localStorage.setItem(LAYOUT_BY_MODE_KEY, JSON.stringify(map));
+    } catch (e) { /* 写入失败不致命 */ }
+  }
+
   function applyStyle() {
     const theme = localStorage.getItem(THEME_KEY) || 'emerald';
-    const layout = localStorage.getItem(LAYOUT_KEY) || 'grid';
+    // 布局按当前 mode 取——切模式时自动应用该 mode 独立的 layout
+    const layout = getLayoutForMode(currentMode);
     document.body.dataset.theme = theme;
     document.body.dataset.layout = layout;
     for (const [id, key] of Object.entries(SWITCH_IDS)) {
@@ -779,7 +810,7 @@
       return;
     }
     if (kind === 'theme') localStorage.setItem(THEME_KEY, value);
-    else localStorage.setItem(LAYOUT_KEY, value);
+    else setLayoutForMode(currentMode, value);   // 写当前 mode 的 layout（切回时自动恢复）
     applyStyle();
   }
 
