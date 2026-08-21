@@ -375,6 +375,79 @@ function saveBookmarks() {
   }
 }
 
+// ---- 投资计算器：当前持仓 + 目标权重加载 ----
+// invest-holdings.json 是用户当前持仓（4 个标的的金额）+ lastRebalance 日期。本机专属（D050），不入库。
+// 加载失败保护与 bookmarks 同款（v1.1 教训）：宁可拒绝写入，也不让内存空对象覆盖原文件。
+// 注意：D050 隔离 + v1.1 TDZ 教训，常量必须在加载段之前声明（bookmarks 的灾难就是 const 晚于 let 导致 TDZ）。
+const HOLDINGS_PATH = path.join(ROOT, 'invest-holdings.json');
+const INVEST_PERSONAL_PATH = path.join(ROOT, 'invest-personal.json');
+let holdingsLoadFailed = false;
+let holdings = { holdings: {}, lastRebalance: null };
+try {
+  if (fs.existsSync(HOLDINGS_PATH)) {
+    const raw = fs.readFileSync(HOLDINGS_PATH, 'utf8').replace(/^\uFEFF/, '');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      // 旧数据无 lastRebalance → null；holdings 字段必须为对象
+      holdings = {
+        holdings: (parsed.holdings && typeof parsed.holdings === 'object' && !Array.isArray(parsed.holdings))
+          ? parsed.holdings
+          : {},
+        lastRebalance: (typeof parsed.lastRebalance === 'string') ? parsed.lastRebalance : null,
+      };
+    } else {
+      // 文件存在但不是对象（结构损坏）→ 备份 + 标记失败
+      backupCorruptedData(HOLDINGS_PATH, 'parsed value is not an object');
+      holdingsLoadFailed = true;
+    }
+  }
+  // 文件不存在 = 全新安装，正常空状态，不算失败
+} catch (e) {
+  console.error('读取 invest-holdings.json 失败:', e.message);
+  backupCorruptedData(HOLDINGS_PATH, e.message);
+  holdingsLoadFailed = true;
+}
+
+function saveHoldings() {
+  if (holdingsLoadFailed) {
+    console.error('[FATAL] 拒绝写入 invest-holdings.json：启动加载失败，备份在 ' + HOLDINGS_PATH + '.bak。请手动检查并从 .bak 恢复后重启服务。');
+    return false;
+  }
+  try {
+    fs.writeFileSync(HOLDINGS_PATH, JSON.stringify(holdings, null, 2), 'utf8');
+    return true;
+  } catch (e) {
+    console.error('写入 invest-holdings.json 失败:', e.message);
+    return false;
+  }
+}
+
+// 读取目标权重（invest-personal.json 的 targets 字段）
+// 不做 LoadFailed 保护（targets 是配置不是数据；解析失败时回退默认方案B 25/20/25/30，不阻断计算）
+function loadTargets() {
+  const DEFAULT_TARGETS = {
+    '红利低波50': 25,
+    '沪港深成长红利低波动': 20,
+    '中证全指': 25,
+    '纳斯达克100': 30,
+  };
+  try {
+    if (!fs.existsSync(INVEST_PERSONAL_PATH)) return DEFAULT_TARGETS;
+    const raw = fs.readFileSync(INVEST_PERSONAL_PATH, 'utf8').replace(/^\uFEFF/, '');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && parsed.targets && typeof parsed.targets === 'object') {
+      // targets 字段必须 4 个标的百分比之和 = 100（容差 ±0.5）
+      const t = parsed.targets;
+      const sum = Object.values(t).reduce((s, v) => s + Number(v), 0);
+      if (Math.abs(sum - 100) < 0.5) return t;
+      console.error('invest-personal.json targets 之和 = ' + sum + ' ≠ 100，使用默认目标');
+    }
+  } catch (e) {
+    console.error('读取 invest-personal.json 失败，使用默认目标:', e.message);
+  }
+  return DEFAULT_TARGETS;
+}
+
 // ---- 系统信息卡 mode 持久化（syscards-state.json：8 张内置信息卡的 mode 字段）----
 // 存储路径常量 + 初始化见 normalizeModeField 之后的「系统卡 mode」段。
 // SYS_CARDS 是 app.js 内置的（keyed 渲染复用 DOM），无 buttons.json 这种配置文件；
@@ -436,6 +509,10 @@ const INVEST_FILES = {
   'sys-invest-rules':     'invest-rules.json',
   'sys-invest-personal':  'invest-personal.json',
 };
+// 阈值常量（与原 invest-cadence.json §再平衡方案 + §5 条硬约束 对齐）
+const INVEST_THRESHOLD_NORMAL = 5;   // 触发季度再平衡的偏差（绝对 %）
+const INVEST_THRESHOLD_EMERG = 10;   // 触发立即再平衡的偏差（绝对 %）
+const INVEST_FORCE_MONTHS = 6;       // 距上次再平衡满 N 个月强制再平衡
 let syscardModes = {};  // id -> normalizeModeField 后的 mode 字段（启动时从文件读；旧数据缺省视为 null）
 try {
   if (fs.existsSync(SYSCARDS_PATH)) {
@@ -1872,6 +1949,119 @@ const server = http.createServer(async (req, res) => {
     } catch (e) {
       return json(res, { ok: false, error: '方案文件解析失败' }, 500);
     }
+  }
+
+  // 投资计算器：GET /api/invest-calc → 返回目标 / 当前 / 偏差 / 状态判断 / 操作步骤
+  // 状态机（与原 invest-cadence.json §再平衡方案 + §5 条硬约束 对齐）：
+  //   - 任一偏差 > 10% → 'emergency'（立即再平衡）
+  //   - 任一偏差 > 5%  → 'threshold'（季度再平衡触发）
+  //   - 距 lastRebalance > 6 个月 → 'forced'（强制再平衡）
+  //   - 否则 → 'ok'（无需再平衡）
+  if (p === '/api/invest-calc' && req.method === 'GET') {
+    const targets = loadTargets();
+    const current = (holdings && holdings.holdings) || {};
+    // 计算总额 + 各资产占比
+    const assetNames = Object.keys(targets);
+    const rows = assetNames.map((name) => {
+      const t = Number(targets[name]) || 0;
+      const amt = Number(current[name]) || 0;
+      return { name, target: t, amount: amt };
+    });
+    const total = rows.reduce((s, r) => s + r.amount, 0);
+    if (total > 0) {
+      rows.forEach((r) => {
+        r.currentPct = +(r.amount / total * 100).toFixed(2);
+        r.deviation = +(r.currentPct - r.target).toFixed(2);
+      });
+    } else {
+      rows.forEach((r) => { r.currentPct = 0; r.deviation = 0; });
+    }
+    // 状态判断：按优先级 emergency > forced > threshold > ok
+    let status = 'ok';
+    const triggerAssets = rows.filter((r) => Math.abs(r.deviation) > INVEST_THRESHOLD_NORMAL);
+    const emergencyAssets = rows.filter((r) => Math.abs(r.deviation) > INVEST_THRESHOLD_EMERG);
+    let nextCheck = null;
+    if (holdings.lastRebalance) {
+      const last = new Date(holdings.lastRebalance);
+      const next = new Date(last);
+      next.setMonth(next.getMonth() + INVEST_FORCE_MONTHS);
+      nextCheck = next.toISOString().slice(0, 10);
+    }
+    let forceTriggered = false;
+    if (holdings.lastRebalance) {
+      const last = new Date(holdings.lastRebalance);
+      const monthsSince = (Date.now() - last.getTime()) / (1000 * 60 * 60 * 24 * 30);
+      forceTriggered = monthsSince >= INVEST_FORCE_MONTHS;
+    }
+    if (emergencyAssets.length > 0) {
+      status = 'emergency';
+    } else if (forceTriggered) {
+      status = 'forced';
+    } else if (triggerAssets.length > 0) {
+      status = 'threshold';
+    }
+    // 操作步骤（仅 emergency/threshold/forced 时返回；列出每个触发资产的买卖金额）
+    const actions = (status === 'ok') ? [] : (() => {
+      const targetAmt = (r) => +(total * r.target / 100).toFixed(0);
+      const actions = [];
+      // 超配：实际 > 目标 → 卖出金额 = 实际 - 目标
+      // 低配：实际 < 目标 → 买入金额 = 目标 - 实际
+      const overAll = rows.filter((r) => r.deviation > INVEST_THRESHOLD_NORMAL);
+      const underAll = rows.filter((r) => r.deviation < -INVEST_THRESHOLD_NORMAL);
+      overAll.forEach((r) => actions.push({ type: 'sell', asset: r.name, amount: r.amount - targetAmt(r) }));
+      underAll.forEach((r) => actions.push({ type: 'buy', asset: r.name, amount: targetAmt(r) - r.amount }));
+      return actions;
+    })();
+    return json(res, {
+      ok: true,
+      data: {
+        targets,
+        rows,
+        total,
+        status,
+        actions,
+        lastRebalance: holdings.lastRebalance || null,
+        nextCheck,
+        loadFailed: holdingsLoadFailed,
+      },
+    });
+  }
+
+  // POST /api/invest-calc/holdings → 保存当前持仓金额；body: { holdings: { asset: amount } }
+  if (p === '/api/invest-calc/holdings' && req.method === 'POST') {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    try {
+      const parsed = JSON.parse(body);
+      if (!parsed.holdings || typeof parsed.holdings !== 'object' || Array.isArray(parsed.holdings)) {
+        return json(res, { ok: false, error: 'holdings 必须为对象' }, 400);
+      }
+      // 仅接受目标权重里有的标的；金额强制为 ≥0 数字
+      const targets = loadTargets();
+      const sanitized = {};
+      for (const name of Object.keys(targets)) {
+        const v = Number(parsed.holdings[name]);
+        if (Number.isFinite(v) && v >= 0) sanitized[name] = v;
+      }
+      if (holdingsLoadFailed) {
+        return json(res, { ok: false, error: '持仓文件加载失败，禁止写入（详见 .bak）', loadFailed: true }, 500);
+      }
+      holdings.holdings = sanitized;
+      const ok = saveHoldings();
+      return json(res, { ok });
+    } catch (e) {
+      return json(res, { ok: false, error: '请求格式错误: ' + e.message }, 400);
+    }
+  }
+
+  // POST /api/invest-calc/rebalanced → 标记已再平衡（lastRebalance = today）
+  if (p === '/api/invest-calc/rebalanced' && req.method === 'POST') {
+    if (holdingsLoadFailed) {
+      return json(res, { ok: false, error: '持仓文件加载失败，禁止写入', loadFailed: true }, 500);
+    }
+    holdings.lastRebalance = new Date().toISOString().slice(0, 10);
+    const ok = saveHoldings();
+    return json(res, { ok, lastRebalance: holdings.lastRebalance });
   }
 
   // 运行日志
