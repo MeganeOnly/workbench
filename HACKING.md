@@ -3,7 +3,7 @@
 > **本文件是工作台项目的快速上手入口。** 改代码前 5 分钟读这份 → 直接动手；遇到细节 → 跳 [`DEV.md`](./DEV.md) 对应章节。
 > 完整 API、机制详解、所有版本变更历史都在 DEV.md（53KB，本机专属）；本文件是入口与索引，不是替代。
 >
-> **上次更新**：2026-08-23（投资计算器 v3.3：每日定投=固定总额按缺口分配；删除「推荐定投方式」块 + 「操作建议」块；§4 加改投资计算器行）
+> **上次更新**：2026-08-22（投资计算器 v3.4：目标/持仓支持自加/删标的——"我能自己添加标的"；§4 更新改投资计算器行）
 
 > **新概念**：mode 字段 4 态——`null` / `string` / `string[]` / `'__hidden__'`（v0.8 新增）；`__hidden__` 是 UI 上"隐藏"按钮对应的 sentinel，与具体模式互斥（content 在任何模式下都不显示）。
 >
@@ -143,7 +143,7 @@
 | 模式管理区按分类收起 | 设置面板「模式管理」5 个分组的标题行（v0.8 可点击 button；v1 新增系统卡组） | localStorage `workbench-fold-mmgr-{groupId}` 持久化；**5 个** groupId 固定：`bookmark` / `feed` / `shortcut` / `manual` / `syscard` |
 | 晚间统一推送 GitHub | 本机开发者约定，按各自 skill / 脚本走 | 自动 fetch + 分歧检测 + 敏感内容审计 + 列文件 + 默认确认 |
 | 调整 MiniMax 周限额 marker 样式 / 算法 / edge case | `public/wb-render.js` 的 `renderMiniMaxCard` + `formatResetIn` + `public/style.css` 的 `.mmx-bar-marker` 段 + `tests/test-minimax.mjs`（5 个 marker 断言 A/B/C/D/E + 2 个形状 A.5） | Ctrl+F5 | v0.9 算法（marker 周期用 `wweek.windowMinutes` 动态）+ v0.9.4 视觉（SVG 右括号 `)`，10×10 viewBox，path `M 5 0 Q 10 5, 5 10`）；位置/title/edge case 逻辑不变 |
-| 改投资计算器（v3.3：偏离弥补定投法） | `public/wb-render.js` 的 `renderInvestCalcView` / `openInvestEdit` + `server.js` 的 `computeRebalancePlan` + `public/style.css` `.invest-calc-*` 段 | Ctrl+F5（仅改 server.js 需重启服务） | v2 设计：外面只看结果（无 input），点 ⚙ 设置进编辑；软约束（纳指>40% / 双红利低波合计>45%）在编辑模式实时红字警告，不阻止保存；**v3.3**：每日定投 = 固定总额（dailyPerWorkday）按缺口比例分配（超配→0），不做"基础+补仓"超发；删除「推荐定投方式」块 + 「操作建议」块；表格「买入/工作日」列是唯一入口 |
+| 改投资计算器（v3.4：自加/删标的） | `public/wb-render.js` 的 `renderInvestCalcView` / `openInvestEdit` + `server.js` 的 `computeRebalancePlan` + `public/style.css` `.invest-calc-*` 段 | Ctrl+F5（仅改 server.js 需重启服务） | v2 设计：外面只看结果（无 input），点 ⚙ 设置进编辑；软约束（纳指>40% / 双红利低波合计>45%）在编辑模式实时红字警告，不阻止保存；**v3.3**：每日定投 = 固定总额（dailyPerWorkday）按缺口比例分配（超配→0），不做"基础+补仓"超发；删除「推荐定投方式」块 + 「操作建议」块；表格「买入/工作日」列是唯一入口；**v3.4**：目标/持仓列表支持自加/删标的（`rec.investAssets` 是两列表唯一真源，辅助函数见 wb-render.js「自加标的辅助」段）；服务端 holdings 端点接受任意标的名 + config 保存时修剪已删标的残留 |
 | 加静态信息卡（数据存 JSON 文件；如投资方案类） | 新建 `invest-xxx.json` + `server.js`（INVEST_FILES + `/api/invest/:id`）+ `public/wb-core.js`（SYS_CARDS 镜像 + CARD_ICONS）+ `public/wb-render.js`（`sys-invest-*` 通用分支 + renderInvestInfoCard helper）+ `public/style.css`（`.invest-info-*` 段） + `.gitignore`（个人专属 JSON） | 重启服务（仅 server.js 改时） | **v2 已弃用**：sys-invest-rules 删除（约束警告搬进计算器编辑模式红字）；如需新卡走 sys-invest-* 通用分支已不再适用，改用 invest-calc 模式 |
 
 ---

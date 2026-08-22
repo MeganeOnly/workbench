@@ -376,7 +376,7 @@ function saveBookmarks() {
 }
 
 // ---- 投资计算器：当前持仓 + 目标权重加载 ----
-// invest-holdings.json 是用户当前持仓（4 个标的的金额）+ lastRebalance 日期。本机专属（D050），不入库。
+// invest-holdings.json 是用户当前持仓（各标的的金额，标的由用户在设置里自加/删）+ lastRebalance 日期。本机专属（D050），不入库。
 // 加载失败保护与 bookmarks 同款（v1.1 教训）：宁可拒绝写入，也不让内存空对象覆盖原文件。
 // 注意：D050 隔离 + v1.1 TDZ 教训，常量必须在加载段之前声明（bookmarks 的灾难就是 const 晚于 let 导致 TDZ）。
 const HOLDINGS_PATH = path.join(ROOT, 'invest-holdings.json');
@@ -436,7 +436,7 @@ function saveHoldings() {
 }
 
 // ---- 投资个人配置（invest-personal.json：targets / dailyPerWorkday / workdays） ----
-// 三字段合一：目标权重（必须和=100，容差±0.5）+ 预计每个工作日定投额（默认 100 元）+ 工作日定义（默认 [1,2,3,4,5]，周日=0）
+// 三字段合一：目标权重（标的数量可变，和必须=100，容差±0.5；用户可在设置里自加/删标的）+ 预计每个工作日定投额（默认 100 元）+ 工作日定义（默认 [1,2,3,4,5]，周日=0）
 // 加载失败保护与 holdings 同款：备份为 .bak + 拒写入（v1.1 教训扩展——D050 防护扩到所有用户数据文件）。
 let investConfigLoadFailed = false;
 let investConfig = { ...DEFAULT_INVEST_CONFIG };
@@ -445,7 +445,7 @@ try {
     const raw = fs.readFileSync(INVEST_PERSONAL_PATH, 'utf8').replace(/^\uFEFF/, '');
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      // targets: 4 个标的百分比之和必须 = 100（容差 ±0.5）——不达标则用默认
+      // targets: 各标的百分比之和必须 = 100（容差 ±0.5）——不达标则用默认
       let targets = DEFAULT_INVEST_CONFIG.targets;
       if (parsed.targets && typeof parsed.targets === 'object') {
         const sum = Object.values(parsed.targets).reduce((s, v) => s + Number(v), 0);
@@ -2208,7 +2208,7 @@ const server = http.createServer(async (req, res) => {
     for await (const chunk of req) body += chunk;
     try {
       const parsed = JSON.parse(body);
-      // targets：必须 4 个标的之和 = 100
+      // targets：必须 N 个标的之和 = 100（标的数量可变，v3.4 起用户可自加/删）
       if (!parsed.targets || typeof parsed.targets !== 'object' || Array.isArray(parsed.targets)) {
         return json(res, { ok: false, error: 'targets 必须为对象' }, 400);
       }
@@ -2260,6 +2260,17 @@ const server = http.createServer(async (req, res) => {
         showSellInRebalance: newShowSell,
       };
       const ok = saveInvestConfig();
+      // 修剪持仓：删除不在新 targets 里的残留标的（v3.4 自加标的功能配套——用户删标的
+      // 后，holdings 里的旧金额不再展示但留在文件里会越积越多，这里统一清掉）。
+      // 注：持仓保存（/api/invest-calc/holdings）在 config 之前发生，新标的此刻已在
+      // newTargets 里（investConfig 已更新），所以不会误删刚添加的标的。
+      if (!holdingsLoadFailed) {
+        let pruned = false;
+        for (const k of Object.keys(holdings.holdings)) {
+          if (!(k in newTargets)) { delete holdings.holdings[k]; pruned = true; }
+        }
+        if (pruned) saveHoldings();
+      }
       return json(res, { ok });
     } catch (e) {
       return json(res, { ok: false, error: '请求格式错误: ' + e.message }, 400);
@@ -2275,10 +2286,10 @@ const server = http.createServer(async (req, res) => {
       if (!parsed.holdings || typeof parsed.holdings !== 'object' || Array.isArray(parsed.holdings)) {
         return json(res, { ok: false, error: 'holdings 必须为对象' }, 400);
       }
-      // 仅接受目标权重里有的标的；金额强制为 ≥0 数字
-      const targets = loadTargets();
+      // 接受前端传来的任意标的名（含本次编辑新增、尚未写回 targets 的标的）；
+      // 金额强制为 ≥0 数字；已删除标的的残留金额在 config 保存时统一修剪（见下）。
       const sanitized = {};
-      for (const name of Object.keys(targets)) {
+      for (const name of Object.keys(parsed.holdings)) {
         const v = Number(parsed.holdings[name]);
         if (Number.isFinite(v) && v >= 0) sanitized[name] = v;
       }

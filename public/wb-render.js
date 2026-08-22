@@ -529,13 +529,16 @@
     }
   }
 
-  // ===== 投资计算器 v3.3 渲染 =====
+  // ===== 投资计算器 v3.4 渲染 =====
   // 设计：
   //   - 视图模式（默认）：只显示结果（总市值 / 当前占比 vs 目标表 / 每工作日合计 / 推荐卖出 + 标记按钮）
   //   - 编辑模式（点 ⚙ 设置）：显示输入面板（目标权重带警告 + 当前持仓 + 每日定投额）
   //   - v3.3（用户反馈）：删除「推荐定投方式」块 + 删除「操作建议」状态块（一次性买卖金额列表）——
   //     偏离靠每日定投自动弥补（偏离弥补定投法），表格「买入/工作日」列就是唯一入口；
   //     卖出区保留（用户挑时间卖，设置里可开关显示）
+  //   - v3.4（用户反馈"我能自己添加标的"）：编辑模式目标/持仓列表支持自加/删标的——
+  //     标的名唯一（rec.investAssets 为编辑会话唯一真源，两列表共用）；删除不落盘，保存统一提交；
+  //     服务端 targets 集合动态化 + holdings 端点接受任意标的名 + config 保存时修剪已删标的残留。
   //   - 硬约束已删除；纳指 > 40% / 双红利低波合计 > 45% 在编辑模式标红警告，**不阻止**保存
   //   - 数据接口：/api/invest-calc（GET）+ /api/invest-calc/config（POST）+ /api/invest-calc/holdings（POST）+ /api/invest-calc/rebalanced（POST）
   // 视图模式（passive）：外面只能看到结果，没有任何 input
@@ -635,39 +638,28 @@
   function openInvestEdit(rec) {
     if (!rec || !rec.refs || !rec.refs.edit) return;
     const data = rec.data || {};
-    const targets = data.targets || {};
     const rows = data.rows || [];
     const total = data.total || 0;
     const dailyPerWorkday = data.dailyPerWorkday || 0;
+    // 标的集合（v3.4 自加标的）：编辑会话内"目标权重"与"当前持仓"两列表的唯一真源；
+    // 目标/持仓行通过 data-asset 关联，添加/删除只改这个数组 + 重建两个列表。
+    rec.investAssets = rows.map((r) => r.name);
     // workdays 不再由前端管理（v2.1）：服务端保留 schema 字段向后兼容用户自定义值；前端不发送
-    // 1. 目标权重（带警告：纳指>40% / 双红利低波>45%）
+    // 1. 目标权重（带警告：纳指>40% / 双红利低波>45%；v3.4 支持自加/删标的）
     const targetsHtml = '<div class="invest-calc-edit-section">' +
       '<div class="invest-calc-edit-title">目标权重（必须之和 = 100）</div>' +
-      '<div class="invest-calc-targets-list">' +
-      rows.map((r) => {
-        const val = Number(targets[r.name]) || 0;
-        return '<div class="invest-calc-target-row" data-asset="' + escapeHtml(r.name) + '">' +
-          '<span class="invest-calc-target-name">' + escapeHtml(r.name) + '</span>' +
-          '<input type="number" min="0" max="100" step="1" class="invest-calc-target-input" data-asset="' + escapeHtml(r.name) + '" value="' + val + '" />' +
-          '<span class="invest-calc-target-unit">%</span>' +
-        '</div>';
-      }).join('') +
+      '<div class="invest-calc-targets-list"></div>' +
+      '<div class="invest-calc-add-asset-row">' +
+        '<input type="text" class="invest-calc-add-asset-input" maxlength="' + INVEST_ASSET_MAX_LEN + '" placeholder="添加新标的，如：标普500" />' +
+        '<button type="button" class="invest-calc-add-asset-btn">添加标的</button>' +
       '</div>' +
       '<div class="invest-calc-warnings" id="invest-calc-warnings"></div>' +
       '<div class="invest-calc-target-sum" id="invest-calc-target-sum"></div>' +
       '</div>';
-    // 2. 当前持仓（4 个 input）
+    // 2. 当前持仓（input 数量与目标权重一致，v3.4 起由 rec.investAssets 驱动）
     const holdingsHtml = '<div class="invest-calc-edit-section">' +
       '<div class="invest-calc-edit-title">当前持仓（输入金额 ¥）</div>' +
-      '<div class="invest-calc-targets-list">' +
-      rows.map((r) => {
-        return '<div class="invest-calc-target-row" data-asset="' + escapeHtml(r.name) + '">' +
-          '<span class="invest-calc-target-name">' + escapeHtml(r.name) + '</span>' +
-          '<span class="invest-calc-target-unit">¥</span>' +
-          '<input type="number" min="0" step="100" class="invest-calc-holding-input" data-asset="' + escapeHtml(r.name) + '" value="' + (r.amount || 0) + '" />' +
-        '</div>';
-      }).join('') +
-      '</div>' +
+      '<div class="invest-calc-holdings-list"></div>' +
       '<div class="invest-calc-holdings-actions">' +
         '<span class="invest-calc-total" id="invest-calc-edit-total">总市值 ¥' + total.toLocaleString() + '</span>' +
         '<span class="invest-calc-holdings-note">下方"保存"会一起保存持仓</span>' +
@@ -711,8 +703,11 @@
     rec.refs.view.style.display = 'none';
     rec.refs.edit.style.display = 'block';
     rec.editing = true;
-    // 绑定编辑模式交互
+    // 渲染目标/持仓两列表（行数据来自 rec.investAssets + rec.data 初值），再绑定交互
+    renderInvestAssetLists(rec);
     bindInvestEditEvents(rec);
+    updateInvestWarnings(rec);
+    updateInvestTotal(rec);
   }
 
   // 关闭编辑模式：恢复视图模式，重新拉数据渲染
@@ -724,67 +719,31 @@
     if (WB.renderSystemCard) WB.renderSystemCard('sys-invest-calc');
   }
 
-  // 编辑模式交互：实时警告更新 + 持仓保存 + 配置保存 + 取消
+  // 编辑模式交互：自加/删标的 + 实时警告 + 保存（持仓+配置）+ 卖出开关 + 取消
   function bindInvestEditEvents(rec) {
     const refs = rec.refs;
-    const data = rec.data || {};
-    const targets = data.targets || {};
-    // 1. 目标权重输入变化 → 实时更新警告 + 总和提示
-    const updateWarnings = () => {
-      const newTargets = {};
-      refs.edit.querySelectorAll('.invest-calc-target-input').forEach((el) => {
-        newTargets[el.dataset.asset] = Number(el.value) || 0;
+    // 1. 添加标的（按钮 / 回车；添加本身不落盘，由"保存"统一收集）
+    const addBtn = refs.edit.querySelector('.invest-calc-add-asset-btn');
+    const addInput = refs.edit.querySelector('.invest-calc-add-asset-input');
+    if (addBtn) addBtn.addEventListener('click', () => addInvestAsset(rec, addInput ? addInput.value : ''));
+    if (addInput) {
+      addInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); addInvestAsset(rec, addInput.value); }
       });
-      const warnings = computeWarningsClient(newTargets);
-      const wEl = refs.edit.querySelector('#invest-calc-warnings');
-      if (wEl) {
-        if (warnings.length === 0) {
-          wEl.innerHTML = '';
-        } else {
-          wEl.innerHTML = warnings.map((w) =>
-            '<div class="invest-calc-warning">' + escapeHtml(w.message) + '</div>'
-          ).join('');
-        }
-      }
-      // 总和提示（v3.2：sum≠100 时红字提示，避免点保存后 config 400 连带困惑）
-      const sum = Object.values(newTargets).reduce((s, v) => s + v, 0);
-      const sumEl = refs.edit.querySelector('#invest-calc-target-sum');
-      if (sumEl) {
-        const ok = Math.abs(sum - 100) < 0.5;
-        sumEl.textContent = '合计 ' + sum + '%' + (ok ? '' : '（≠100，配置将无法保存）');
-        sumEl.className = 'invest-calc-target-sum' + (ok ? '' : ' bad');
-      }
-    };
-    refs.edit.querySelectorAll('.invest-calc-target-input').forEach((el) => {
-      el.addEventListener('input', updateWarnings);
-    });
-    updateWarnings();
-    // 2. 持仓输入变化 → 实时更新总市值
-    const updateTotal = () => {
-      let total = 0;
-      refs.edit.querySelectorAll('.invest-calc-holding-input').forEach((el) => {
-        total += Math.max(0, Number(el.value) || 0);
-      });
-      const totalEl = refs.edit.querySelector('#invest-calc-edit-total');
-      if (totalEl) totalEl.textContent = '总市值 ¥' + total.toLocaleString();
-    };
-    refs.edit.querySelectorAll('.invest-calc-holding-input').forEach((el) => {
-      el.addEventListener('input', updateTotal);
-    });
-    // 3. 工作日硬编码 [1,2,3,4,5] 周一到周五，无 UI（前端 v2.1 移除 toggle）
-    // 4. 保存（v3.1：合并 v2.x 双按钮为一个；保存 = 持仓 + 配置 一起保存）
+    }
+    // 2. 保存（v3.1：合并 v2.x 双按钮为一个；保存 = 持仓 + 配置 一起保存）
     //     历史：v2.x 有两个按钮（"保存持仓" + "保存配置"）—— 用户原话"当前持仓无法正确保存"
     //     根因：用户点"保存配置"以为保存全部但只保存 config，holdings 仍为旧值
     //     修复：去掉"保存持仓"独立按钮，主"保存"按钮 = 持仓 + 配置 一起保存
     const configSaveBtn = refs.edit.querySelector('.invest-calc-config-save');
     if (configSaveBtn) {
       configSaveBtn.addEventListener('click', async () => {
-        // 4.1 收集持仓（从 holding inputs 读取）
+        // 2.1 收集持仓（从 holding inputs 读取；含本次自加的标的）
         const holdings = {};
         refs.edit.querySelectorAll('.invest-calc-holding-input').forEach((el) => {
           holdings[el.dataset.asset] = Math.max(0, Number(el.value) || 0);
         });
-        // 4.2 收集配置
+        // 2.2 收集配置（targets 集合动态——自加/删标的后的最终列表）
         const newTargets = {};
         refs.edit.querySelectorAll('.invest-calc-target-input').forEach((el) => {
           newTargets[el.dataset.asset] = Number(el.value) || 0;
@@ -794,13 +753,14 @@
         const showSellToggle = refs.edit.querySelector('#invest-calc-show-sell-toggle');
         const showSellInRebalance = showSellToggle ? showSellToggle.getAttribute('aria-checked') === 'true' : true;
         // workdays 不发送（服务端保留 in-memory 当前值；v2.1 删除 UI 后前端不再持有它）
-        // 4.3 保存 = 持仓 + 配置 分两步，解耦（v3.2 修复）：
+        // 2.3 保存 = 持仓 + 配置 分两步，解耦（v3.2 修复）：
         //     历史 bug：v2.x 并行 Promise.all → config 校验失败（targets 之和≠100）会连带
         //     holdings 显示"保存失败"——用户改持仓却被 config 问题卡住（原话"当前持仓无法正确保存"）
         //     修复：先保存 holdings（独立，总能成功），再保存 config（有 sum=100 校验）；
         //     config 失败只提示 config 问题，不影响已保存的 holdings。
+        //     v3.4：服务端 holdings 端点已接受任意标的名，新标的金额在 targets 落盘前也能保存。
         try {
-          // 4.4 先保存持仓（独立端点，不依赖 targets 校验）
+          // 2.4 先保存持仓（独立端点，不依赖 targets 校验）
           const holdingsRes = await fetchJSON('/api/invest-calc/holdings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -811,7 +771,7 @@
             if (WB.showToast) WB.showToast('持仓保存失败: ' + (holdingsRes && holdingsRes.error || '未知错误'), 'err');
             return;
           }
-          // 4.5 再保存配置（有 sum=100 校验；失败只提示 config，不覆盖 holdings 已保存）
+          // 2.5 再保存配置（有 sum=100 校验；失败只提示 config，不覆盖 holdings 已保存）
           try {
             const configRes = await fetchJSON('/api/invest-calc/config', {
               method: 'POST',
@@ -833,7 +793,7 @@
         }
       });
     }
-    // 5.5. 卖出开关切换（aria-checked 反转 + 视觉态）
+    // 3. 卖出开关切换（aria-checked 反转 + 视觉态）
     const showSellToggleBtn = refs.edit.querySelector('#invest-calc-show-sell-toggle');
     if (showSellToggleBtn) {
       showSellToggleBtn.addEventListener('click', () => {
@@ -841,11 +801,132 @@
         showSellToggleBtn.setAttribute('aria-checked', String(!cur));
       });
     }
-    // 6. 取消
+    // 4. 取消
     const cancelBtn = refs.edit.querySelector('.invest-calc-config-cancel');
     if (cancelBtn) {
       cancelBtn.addEventListener('click', () => closeInvestEdit(rec));
     }
+  }
+
+  // ===== 投资计算器：自加标的辅助（v3.4） =====
+  // 设计：rec.investAssets 是编辑会话内的标的集合唯一真源；
+  //   目标权重列表（.invest-calc-targets-list）与持仓列表（.invest-calc-holdings-list）
+  //   都按它渲染，行内 data-asset 关联两个列表中的同一标的；
+  //   添加/删除只改 rec.investAssets + 重建两列表（input 实时值会被保留，不丢已输入）。
+  const INVEST_ASSET_MAX_LEN = 24;
+
+  function investTargetRowHtml(name, val) {
+    return '<div class="invest-calc-target-row" data-asset="' + escapeHtml(name) + '">' +
+      '<span class="invest-calc-target-name">' + escapeHtml(name) + '</span>' +
+      '<input type="number" min="0" max="100" step="1" class="invest-calc-target-input" data-asset="' + escapeHtml(name) + '" value="' + val + '" />' +
+      '<span class="invest-calc-target-unit">%</span>' +
+      '<button type="button" class="invest-calc-remove-btn" data-asset="' + escapeHtml(name) + '" title="删除该标的">✕</button>' +
+      '</div>';
+  }
+
+  function investHoldingRowHtml(name, amt) {
+    return '<div class="invest-calc-target-row" data-asset="' + escapeHtml(name) + '">' +
+      '<span class="invest-calc-target-name">' + escapeHtml(name) + '</span>' +
+      '<span class="invest-calc-target-unit">¥</span>' +
+      '<input type="number" min="0" step="100" class="invest-calc-holding-input" data-asset="' + escapeHtml(name) + '" value="' + amt + '" />' +
+      '<button type="button" class="invest-calc-remove-btn" data-asset="' + escapeHtml(name) + '" title="删除该标的">✕</button>' +
+      '</div>';
+  }
+
+  // 重建目标/持仓两列表：优先保留 input 里的实时值（重建后不丢用户已输入），
+  // 首次渲染（input 不存在）回退到 rec.data（目标权重 + 持仓金额）。
+  function renderInvestAssetLists(rec) {
+    const edit = rec.refs.edit;
+    const tList = edit.querySelector('.invest-calc-targets-list');
+    const hList = edit.querySelector('.invest-calc-holdings-list');
+    if (!tList || !hList) return;
+    const data = rec.data || {};
+    const targets = data.targets || {};
+    const amounts = {};
+    (data.rows || []).forEach((r) => { amounts[r.name] = r.amount || 0; });
+    const w = {};
+    edit.querySelectorAll('.invest-calc-target-input').forEach((el) => { w[el.dataset.asset] = Number(el.value) || 0; });
+    const a = {};
+    edit.querySelectorAll('.invest-calc-holding-input').forEach((el) => { a[el.dataset.asset] = Math.max(0, Number(el.value) || 0); });
+    tList.innerHTML = (rec.investAssets || []).map((name) =>
+      investTargetRowHtml(name, (name in w) ? w[name] : (Number(targets[name]) || 0))).join('');
+    hList.innerHTML = (rec.investAssets || []).map((name) =>
+      investHoldingRowHtml(name, (name in a) ? a[name] : (amounts[name] || 0))).join('');
+    bindInvestInputs(rec);
+  }
+
+  // 给当前列表里的 input / 删除按钮挂监听（列表被重建后旧节点已销毁，直接重绑不重复）
+  function bindInvestInputs(rec) {
+    const edit = rec.refs.edit;
+    edit.querySelectorAll('.invest-calc-target-input').forEach((el) => {
+      el.addEventListener('input', () => updateInvestWarnings(rec));
+    });
+    edit.querySelectorAll('.invest-calc-holding-input').forEach((el) => {
+      el.addEventListener('input', () => updateInvestTotal(rec));
+    });
+    edit.querySelectorAll('.invest-calc-remove-btn').forEach((el) => {
+      el.addEventListener('click', () => removeInvestAsset(rec, el.dataset.asset));
+    });
+  }
+
+  // 实时警告 + 总和提示（v3.2：sum≠100 时红字提示，避免点保存后 config 400 连带困惑）
+  function updateInvestWarnings(rec) {
+    const edit = rec.refs.edit;
+    const newTargets = {};
+    edit.querySelectorAll('.invest-calc-target-input').forEach((el) => {
+      newTargets[el.dataset.asset] = Number(el.value) || 0;
+    });
+    const warnings = computeWarningsClient(newTargets);
+    const wEl = edit.querySelector('#invest-calc-warnings');
+    if (wEl) {
+      wEl.innerHTML = warnings.length === 0 ? '' : warnings.map((w) =>
+        '<div class="invest-calc-warning">' + escapeHtml(w.message) + '</div>').join('');
+    }
+    const sum = Object.values(newTargets).reduce((s, v) => s + v, 0);
+    const sumEl = edit.querySelector('#invest-calc-target-sum');
+    if (sumEl) {
+      const ok = Math.abs(sum - 100) < 0.5;
+      sumEl.textContent = '合计 ' + sum + '%' + (ok ? '' : '（≠100，配置将无法保存）');
+      sumEl.className = 'invest-calc-target-sum' + (ok ? '' : ' bad');
+    }
+  }
+
+  // 持仓输入变化 → 实时更新总市值
+  function updateInvestTotal(rec) {
+    const edit = rec.refs.edit;
+    let total = 0;
+    edit.querySelectorAll('.invest-calc-holding-input').forEach((el) => {
+      total += Math.max(0, Number(el.value) || 0);
+    });
+    const totalEl = edit.querySelector('#invest-calc-edit-total');
+    if (totalEl) totalEl.textContent = '总市值 ¥' + total.toLocaleString();
+  }
+
+  function addInvestAsset(rec, rawName) {
+    const name = String(rawName || '').trim();
+    if (!name) { if (WB.showToast) WB.showToast('请输入标的名称', 'warn'); return; }
+    if (name.length > INVEST_ASSET_MAX_LEN) { if (WB.showToast) WB.showToast('标的名称过长（≤' + INVEST_ASSET_MAX_LEN + ' 字符）', 'warn'); return; }
+    if (name === '__proto__' || name === 'constructor' || name === 'prototype') {
+      if (WB.showToast) WB.showToast('该名称不可用', 'warn'); return;
+    }
+    const assets = rec.investAssets || (rec.investAssets = []);
+    if (assets.some((n) => n.toLowerCase() === name.toLowerCase())) {
+      if (WB.showToast) WB.showToast('该标的已存在：' + name, 'warn'); return;
+    }
+    assets.push(name);
+    renderInvestAssetLists(rec);
+    const input = rec.refs.edit.querySelector('.invest-calc-add-asset-input');
+    if (input) input.value = '';
+    updateInvestWarnings(rec);
+    updateInvestTotal(rec);
+    if (WB.showToast) WB.showToast('已添加标的：' + name, 'ok');
+  }
+
+  function removeInvestAsset(rec, name) {
+    rec.investAssets = (rec.investAssets || []).filter((n) => n !== name);
+    renderInvestAssetLists(rec);
+    updateInvestWarnings(rec);
+    updateInvestTotal(rec);
   }
 
   // 客户端软约束警告（与服务端 computeWarnings 同款——不阻止保存，仅红字提示）

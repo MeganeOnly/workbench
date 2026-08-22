@@ -2774,6 +2774,7 @@ body[data-sidebar="off"] .expand-sidebar { display: none !important; }
    投资计算器（v2：sys-invest-calc，view + edit 双模）
    视图模式：外面只能看结果，没有任何 input
    编辑模式：点 ⚙ 设置 按钮进，输入目标权重（带警告）+ 当前持仓 + 每日定投
+   v3.4：目标/持仓列表支持自加/删标的（.invest-calc-add-asset-* / .invest-calc-remove-btn）
    ============================================================ */
 
 /* ---- 视图模式 ---- */
@@ -3016,7 +3017,7 @@ body[data-sidebar="off"] .expand-sidebar { display: none !important; }
 }
 .invest-calc-target-row {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto auto auto; /* v3.4 加删除按钮列（最后 1 列） */
   align-items: center;
   gap: 6px;
   font-size: 13px;
@@ -3054,9 +3055,65 @@ body[data-sidebar="off"] .expand-sidebar { display: none !important; }
   font-size: 12px;
   font-family: var(--font-num);
 }
-/* 持仓输入行 unit 在前（¥ 在名字后面），重新调整列序 */
-.invest-calc-target-row:has(.invest-calc-holding-input) {
-  grid-template-columns: 1fr auto auto;
+/* 持仓输入行 unit 在前（¥ 在名字后面），与目标行共用 4 列模板（名称 | ¥ | 输入 | 删除） */
+/* v3.4：删除按钮（"破坏性"操作视觉降级——中性灰 + dashed，不抢注意力，见 HACKING §3.5） */
+.invest-calc-remove-btn {
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+  color: var(--text-3);
+  width: 22px;
+  height: 22px;
+  line-height: 1;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: .85;
+  transition: color .15s ease, border-color .15s ease, opacity .15s ease;
+}
+.invest-calc-remove-btn:hover {
+  color: var(--err);
+  border-color: var(--err);
+  opacity: 1;
+}
+/* v3.4：添加标的行（目标权重列表底部） */
+.invest-calc-add-asset-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.invest-calc-add-asset-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-input);
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--text);
+  outline: none;
+  background: var(--surface);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.invest-calc-add-asset-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+.invest-calc-add-asset-btn {
+  flex: 0 0 auto;
+  border-radius: var(--radius-btn);
+  padding: 5px 12px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--accent-deep);
+  color: #fff;
+  border: none;
+  transition: background .15s ease;
+}
+.invest-calc-add-asset-btn:hover {
+  background: var(--accent-deeper);
 }
 .invest-calc-holdings-actions {
   display: flex;
