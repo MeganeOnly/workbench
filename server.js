@@ -515,16 +515,19 @@ function loadTargets() {
 
 // ---- 投资计算器辅助函数 ----
 
-// 再平衡方案（v3 重做）：把"卖出"和"买入"作为完整方案同时计算
+// 再平衡方案（v3.3 重做）：把"卖出"和"买入"作为完整方案同时计算
 //   卖出（可选）：每个超配资产卖回到目标值（基于当前 total）
-//   买入：基于"卖出后 total"计算每日买入（基础按目标权重分摊 + 低配按差额 × CATCHUP_WORKDAYS 分摊）
-//   关键点：用户原话"卖出之后，现在的仓位的总金额就不一样了，所以要注意计算方法"——
-//     卖出后的总市值变小，目标值相应变小，买入建议必须按 post-sell total 重算。
-//   当 showSellInRebalance=false：不显示卖出，买入按当前 total 计算（不做 post-sell 重算）
+//   买入：偏离弥补定投法——每日固定总额（= dailyPerWorkday）按"缺口"比例分配给低配标的；
+//     缺口 = max(0, 目标金额 - 当前金额)，只算低配资产，缺口越大分得越多；
+//     超配资产（含偏离特别大的）直接 0；全部不缺（Σ缺口=0）时回退按目标权重分配（照常定投）。
+//   关键点（用户 v3.3 反馈）：每日定投就是"每天真的就一共投 dailyPerWorkday 那么多"，
+//     不做"基础按权重 + 低配按差额补仓"的超额加码——所以买入合计必须 === dailyPerWorkday。
+//     偏离靠每日定投自动弥补，不推荐一次性大额买入。
+//   卖出区仍显示"卖出后总市值"（用户挑时间卖）；买入按当前 total 算缺口，不依赖是否真卖出。
 //   返回 { showSellInRebalance, sells, totalSell, buys, totalBuy, postSellTotal }
 //     sells: [{asset, amount}]    超配资产卖出金额
-//     buys: [{asset, base, extra, amount}]  每个工作日买入金额（基础 + 补仓）
-function computeRebalancePlan({ rows, total, dailyPerWorkday, workdays, showSellInRebalance, catchupWorkdays }) {
+//     buys: [{asset, amount}]     每个工作日买入金额（合计 === dailyPerWorkday）
+function computeRebalancePlan({ rows, total, dailyPerWorkday, workdays, showSellInRebalance }) {
   const sells = [];
   let postSellTotal = total;
   if (showSellInRebalance) {
@@ -540,39 +543,43 @@ function computeRebalancePlan({ rows, total, dailyPerWorkday, workdays, showSell
     }
     postSellTotal = total - sells.reduce((s, a) => s + a.amount, 0);
   }
-  // 2. 计算每日买入（基础按目标权重分摊 + 低配按差额 × catchupWorkdays 分摊）
-  //    基础用同一个 total 计算；extra 用 postSellTotal 计算（按差额补仓）
-  const baseTotal = Math.max(0, Number(dailyPerWorkday) || 0);
-  const buys = rows.map((r) => {
-    const base = baseTotal * (Number(r.target) || 0) / 100;
-    let extra = 0;
-    if (postSellTotal > 0) {
-      // 卖出后此资产剩余金额 = 当前金额 - 此资产的卖出金额
-      const sellForThisAsset = sells.find((s) => s.asset === r.name)?.amount || 0;
-      const postSellAmount = r.amount - sellForThisAsset;
-      const targetAmount = postSellTotal * (Number(r.target) || 0) / 100;
-      const gap = targetAmount - postSellAmount; // 正 = 低配
-      if (gap > 0) {
-        extra = gap / catchupWorkdays;
-      }
+  // 2. 计算每日买入（v3.3：固定总额按缺口比例分配——偏离弥补定投法）
+  const daily = Math.max(0, Number(dailyPerWorkday) || 0);
+  let allocWeights = rows.map((r) => {
+    if (total > 0) {
+      const targetAmount = total * (Number(r.target) || 0) / 100;
+      return Math.max(0, targetAmount - r.amount);
     }
-    return {
-      asset: r.name,
-      base: Math.round(base),
-      extra: Math.round(extra),
-      amount: Math.round(base + extra),
-    };
+    return 0;
   });
-  const totalBuyBase = buys.reduce((s, a) => s + a.base, 0);
-  const totalBuyExtra = buys.reduce((s, a) => s + a.extra, 0);
+  const weightSum = allocWeights.reduce((s, v) => s + v, 0);
+  if (weightSum <= 0) {
+    // 全部不缺（无持仓 / 刚再平衡 / 全部达标）：回退按目标权重分配，照常定投
+    allocWeights = rows.map((r) => Number(r.target) || 0);
+  }
+  const allocSum = allocWeights.reduce((s, v) => s + v, 0);
+  // 最大余数法：把 daily 整数金额摊到各标的，保证合计 === daily
+  const raw = allocWeights.map((w, i) => ({
+    i,
+    w,
+    amount: allocSum > 0 ? Math.floor(daily * w / allocSum) : 0,
+    frac: allocSum > 0 ? (daily * w / allocSum) - Math.floor(daily * w / allocSum) : 0,
+  }));
+  let remaining = daily - raw.reduce((s, b) => s + b.amount, 0);
+  const order = raw.slice().sort((a, b) => b.frac - a.frac);
+  for (const b of order) {
+    if (remaining <= 0) break;
+    if (b.w <= 0) continue; // 超配/零权重标的绝不分余数
+    b.amount += 1;
+    remaining -= 1;
+  }
+  const buys = raw.map((b) => ({ asset: rows[b.i].name, amount: b.amount }));
   return {
     showSellInRebalance,
     sells,
     totalSell: Math.round(sells.reduce((s, a) => s + a.amount, 0)),
     buys,
-    totalBuyBase,
-    totalBuyExtra,
-    totalBuy: totalBuyBase + totalBuyExtra,
+    totalBuy: daily,
     postSellTotal: Math.round(postSellTotal),
   };
 }
@@ -656,7 +663,6 @@ const INVEST_FILES = {};
 const INVEST_THRESHOLD_NORMAL = 5;   // 触发季度再平衡的偏差（绝对 %）
 const INVEST_THRESHOLD_EMERG = 10;   // 触发立即再平衡的偏差（绝对 %）
 const INVEST_FORCE_MONTHS = 6;       // 距上次再平衡满 N 个月强制再平衡
-const INVEST_CATCHUP_WORKDAYS = 10;  // 推荐每日定投时，按多少个工作日分摊补仓差距（约 2 周）
 // 软约束阈值（编辑模式下标红警告，不阻止保存；v2 设计：硬约束卡删除，警告搬进设置面板）
 const INVEST_WARN_NASDAQ_MAX = 40;          // 纳指占比建议上限（> 即警告）
 const INVEST_WARN_RED_DUO_MAX = 45;          // 双红利低波合计建议上限（> 即警告，分散性不足）
@@ -2098,14 +2104,16 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // 投资计算器：GET /api/invest-calc → 返回目标 / 当前 / 偏差 / 状态判断 / 操作步骤 / 今日推荐定投
+  // 投资计算器：GET /api/invest-calc → 返回目标 / 当前 / 偏差 / 状态判断 / 再平衡方案
   // 状态机（与原 invest-cadence.json §再平衡方案 + §5 条硬约束 对齐）：
   //   - 任一偏差 > 10% → 'emergency'（立即再平衡）
   //   - 任一偏差 > 5%  → 'threshold'（季度再平衡触发）
   //   - 距 lastRebalance > 6 个月 → 'forced'（强制再平衡）
   //   - 否则 → 'ok'（无需再平衡）
   // v2 新增：dailyPerWorkday / workdays / todayRecommendation（基于工作日定投+低配补仓）
-  // v2 新增：warnings（软约束：纳指>40% / 双红利低波合计>45%，仅用于编辑模式展示，GET 也透传便于状态栏）
+  // v3 新增：warnings（软约束：纳指>40% / 双红利低波合计>45%，仅用于编辑模式展示，GET 也透传便于状态栏）
+  // v3.3 变更：rebalancePlan 的 buys 改为「固定总额按缺口比例分配」（偏离弥补定投法，合计===dailyPerWorkday）；
+  //   前端不再渲染状态/操作建议块（一次性买卖金额列表已删除）——偏离靠每日定投自动弥补
   if (p === '/api/invest-calc' && req.method === 'GET') {
     const targets = loadTargets();
     const dailyPerWorkday = investConfig.dailyPerWorkday;
@@ -2163,11 +2171,10 @@ const server = http.createServer(async (req, res) => {
       underAll.forEach((r) => actions.push({ type: 'buy', asset: r.name, amount: targetAmt(r) - r.amount }));
       return actions;
     })();
-    // 再平衡方案（v3：完整卖出+买入方案；买入按 post-sell total 重算）
+    // 再平衡方案（v3：完整卖出+买入方案；v3.3 买入改为固定总额按缺口比例分配）
     const rebalancePlan = computeRebalancePlan({
       rows, total, dailyPerWorkday, workdays,
       showSellInRebalance: investConfig.showSellInRebalance,
-      catchupWorkdays: INVEST_CATCHUP_WORKDAYS,
     });
     // 软约束警告（用于编辑模式标红；GET 也透传，前端决定何时显示）
     const warnings = computeWarnings(targets);

@@ -529,10 +529,13 @@
     }
   }
 
-  // ===== 投资计算器 v2 渲染 =====
+  // ===== 投资计算器 v3.3 渲染 =====
   // 设计：
-  //   - 视图模式（默认）：只显示结果（总市值 / 当前比例 / 偏差 / 今日推荐定投 / 再平衡提示 + 操作）
-  //   - 编辑模式（点 ⚙ 设置）：显示输入面板（目标权重带警告 + 当前持仓 + 每日定投额 + 工作日）
+  //   - 视图模式（默认）：只显示结果（总市值 / 当前占比 vs 目标表 / 每工作日合计 / 推荐卖出 + 标记按钮）
+  //   - 编辑模式（点 ⚙ 设置）：显示输入面板（目标权重带警告 + 当前持仓 + 每日定投额）
+  //   - v3.3（用户反馈）：删除「推荐定投方式」块 + 删除「操作建议」状态块（一次性买卖金额列表）——
+  //     偏离靠每日定投自动弥补（偏离弥补定投法），表格「买入/工作日」列就是唯一入口；
+  //     卖出区保留（用户挑时间卖，设置里可开关显示）
   //   - 硬约束已删除；纳指 > 40% / 双红利低波合计 > 45% 在编辑模式标红警告，**不阻止**保存
   //   - 数据接口：/api/invest-calc（GET）+ /api/invest-calc/config（POST）+ /api/invest-calc/holdings（POST）+ /api/invest-calc/rebalanced（POST）
   // 视图模式（passive）：外面只能看到结果，没有任何 input
@@ -540,11 +543,9 @@
     if (!refs || !refs.view) return;
     const rows = data.rows || [];
     const total = data.total || 0;
-    const status = data.status || 'ok';
-    const actions = data.actions || [];
     const lastRebalance = data.lastRebalance || null;
     const nextCheck = data.nextCheck || null;
-    const plan = data.rebalancePlan || { buys: [], sells: [], totalSell: 0, totalBuy: 0, totalBuyBase: 0, totalBuyExtra: 0, postSellTotal: total, showSellInRebalance: data.showSellInRebalance };
+    const plan = data.rebalancePlan || { buys: [], sells: [], totalSell: 0, totalBuy: 0, postSellTotal: total, showSellInRebalance: data.showSellInRebalance };
     const showSellInRebalance = plan.showSellInRebalance !== false; // 默认 true
     // 按资产名查找 buys/sells（用于表格"买入/工作日"列）
     const buyMap = {};
@@ -563,7 +564,7 @@
           if (Math.abs(dev) > 10) devClass = 'invest-calc-dev-danger';
           else if (Math.abs(dev) > 5) devClass = 'invest-calc-dev-warn';
           else devClass = 'invest-calc-dev-ok';
-          const buy = buyMap[r.name] || { amount: 0, base: 0, extra: 0 };
+          const buy = buyMap[r.name] || { amount: 0 };
           const sellCell = hasSellCol
             ? '<td>' + (sellMap[r.name] ? '¥' + sellMap[r.name].toLocaleString() : '—') + '</td>'
             : '';
@@ -571,32 +572,18 @@
             '<td>' + r.currentPct + '%</td>' +
             '<td>' + r.target + '%</td>' +
             '<td class="' + devClass + '">' + (dev > 0 ? '+' : '') + dev + '%</td>' +
-            '<td>¥' + buy.amount + (buy.extra > 0 ? ' <span class="invest-calc-buy-meta">(+' + buy.extra + ')</span>' : '') + '</td>' +
+            '<td>¥' + buy.amount + '</td>' +
             sellCell + '</tr>';
         }).join('') + '</tbody></table>';
+      // 每工作日合计（v3.3：固定总额按缺口比例分配，超配 0）——替代被删除的"推荐定投方式"块
+      rowsHtml += '<div class="invest-calc-buy-total">每工作日合计 <strong>¥' + (plan.totalBuy || 0) + '</strong> · 按缺口比例分配给低配标的（超配 0）</div>';
     } else {
       // 无当前持仓：提示先去设置面板录入
       rowsHtml = '<div class="invest-calc-empty">尚未录入当前持仓，点 [⚙ 设置] 开始</div>';
     }
-    // 2. 推荐定投方式（v3 简化：只显示工作日定投额 + 分配方式说明 + 总额）
-    //     用户原话"不用显示今日定投金额 我就是长期的 每个工作日投 那些钱我要的就是 定投金额就行了"
-    //     → 移除 isWorkday 分支；改为统一显示"每日 ¥X 定投方式"
-    const dailyPerWorkday = data.dailyPerWorkday || 0;
-    const buyMethodHtml = '<div class="invest-calc-buy-method">' +
-      '<div class="invest-calc-buy-method-title">推荐定投方式（每个工作日）' +
-      ' <span class="invest-calc-buy-method-total">¥' + (plan.totalBuy || 0) + '</span>' +
-      '</div>' +
-      '<div class="invest-calc-buy-method-desc">' +
-      '基础 ¥' + (plan.totalBuyBase || dailyPerWorkday) + ' 按目标权重分摊' +
-      (plan.totalBuyExtra > 0 ? ' + 低配资产按差额补仓 ¥' + plan.totalBuyExtra + '（按 10 个工作日回正）' : '（当前无低配缺口）') +
-      '</div>' +
-      (plan.totalBuyExtra > 0 && showSellInRebalance && plan.totalSell > 0
-        ? '<div class="invest-calc-buy-method-note">卖出 ¥' + plan.totalSell.toLocaleString() + ' 后总市值 ¥' + plan.postSellTotal.toLocaleString() + '，买入按此重算</div>'
-        : '') +
-      '</div>';
-    // 3. 推荐卖出（仅 showSellInRebalance=true 且有卖出项时显示）
-    //     用户原话"卖出我通常确实是一次性做的，但这件事情就很困难 我需要稍微挑选一下时间的，
-    //     所以卖出作为平衡方式的条目，我希望能够在设置中选择是否显示"
+    // 2. 推荐卖出（仅 showSellInRebalance=true 且有卖出项时显示）
+    //    用户原话"卖出我通常确实是一次性做的，但这件事情就很困难 我需要稍微挑选一下时间的，
+    //    所以卖出作为平衡方式的条目，我希望能够在设置中选择是否显示"
     let sellSectionHtml = '';
     if (showSellInRebalance && plan.sells && plan.sells.length > 0) {
       const sellList = plan.sells.map((s) =>
@@ -610,40 +597,7 @@
         '<ul class="invest-calc-sell-list">' + sellList + '</ul>' +
         '</div>';
     }
-    // 4. 状态判断 + 操作步骤（rebalance 大幅偏离时）
-    let statusHtml = '';
-    if (status === 'ok') {
-      statusHtml = '<div class="invest-calc-status invest-calc-status-ok">✓ 当前比例在 ±5% 阈值内，无需再平衡</div>';
-    } else if (status === 'threshold') {
-      statusHtml = '<div class="invest-calc-status invest-calc-status-warn">' +
-        '⚠ 触发季度再平衡阈值（5%~10%），操作建议：</div>' +
-        '<ol class="invest-calc-actions">' +
-          actions.map((a) => {
-            const verb = a.type === 'sell' ? '卖出' : '买入';
-            return '<li>' + verb + ' <strong>' + escapeHtml(a.asset) + '</strong> ¥' + a.amount.toLocaleString() + '</li>';
-          }).join('') +
-        '</ol>' +
-        '<div class="invest-calc-tip">优先用新增定投款调节；不够时才卖出超配的、买入低配的；A 股两只内部可互相转换免申购费</div>';
-    } else if (status === 'forced') {
-      statusHtml = '<div class="invest-calc-status invest-calc-status-warn-strong">' +
-        '📅 距上次再平衡已满 6 个月，强制再平衡，操作建议：</div>' +
-        '<ol class="invest-calc-actions">' +
-          actions.map((a) => {
-            const verb = a.type === 'sell' ? '卖出' : '买入';
-            return '<li>' + verb + ' <strong>' + escapeHtml(a.asset) + '</strong> ¥' + a.amount.toLocaleString() + '</li>';
-          }).join('') +
-        '</ol>';
-    } else if (status === 'emergency') {
-      statusHtml = '<div class="invest-calc-status invest-calc-status-danger">' +
-        '⛔ 任一标的偏离 ±10%，立即再平衡：</div>' +
-        '<ol class="invest-calc-actions">' +
-          actions.map((a) => {
-            const verb = a.type === 'sell' ? '卖出' : '买入';
-            return '<li>' + verb + ' <strong>' + escapeHtml(a.asset) + '</strong> ¥' + a.amount.toLocaleString() + '</li>';
-          }).join('') +
-        '</ol>';
-    }
-    // 5. 头部元信息 + 上次再平衡 + 标记按钮
+    // 3. 头部元信息 + 上次再平衡 + 标记按钮
     const headerHtml = '<div class="invest-calc-header">' +
       '<span class="invest-calc-total">总市值 ¥' + total.toLocaleString() + '</span>' +
       '<span class="invest-calc-last-reb">上次再平衡：' + (lastRebalance || '未记录') + (nextCheck ? '（下次检查 ' + nextCheck + '）' : '') + '</span>' +
@@ -654,9 +608,7 @@
     refs.view.innerHTML =
       headerHtml +
       '<div class="invest-calc-section"><div class="invest-calc-section-title">当前占比 vs 目标</div>' + rowsHtml + '</div>' +
-      buyMethodHtml +
       (sellSectionHtml ? '<div class="invest-calc-section">' + sellSectionHtml + '</div>' : '') +
-      (statusHtml ? '<div class="invest-calc-section">' + statusHtml + '</div>' : '') +
       lastRebHtml;
     // 5. 标记已再平衡按钮
     const rebalancedBtn = refs.view.querySelector('.invest-calc-rebalanced');

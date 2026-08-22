@@ -2828,56 +2828,25 @@ body[data-sidebar="off"] .expand-sidebar { display: none !important; }
   color: var(--text);
 }
 
-/* ---- v3 移除：v2.x 的 .invest-calc-today-rec / .invest-calc-today-meta / .invest-calc-today-note 全部删除
-   替换为 .invest-calc-buy-method（统一显示每日定投额 + 分配方式说明） ---- */
+/* ---- v3.3 移除：v2.x 的 .invest-calc-today-rec / v3 的 .invest-calc-buy-method / .invest-calc-buy-meta
+   （推荐定投方式块 + 买入列补仓角标）全部删除——表格「买入/工作日」列就是唯一入口，
+   由 .invest-calc-buy-total（每工作日合计行）替代 ---- */
 
-/* ---- 今日推荐列（v2.x；v3 改名为 .invest-calc-buy-meta 显示补仓差额） ---- */
-.invest-calc-rec-sell {
+/* ---- v3.3：表格下方每工作日合计行（固定总额按缺口比例分配，超配 0） ---- */
+.invest-calc-buy-total {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border-strong);
+  font-size: 12px;
   color: var(--text-3);
+  text-align: right;
+  font-family: var(--font-body);
+}
+.invest-calc-buy-total strong {
   font-family: var(--font-num);
-}
-/* ---- v3：买入列内 "+额外补仓" 小角标 ---- */
-.invest-calc-buy-meta {
-  font-size: 10px;
-  color: var(--text-3);
-  font-family: var(--font-num);
-  margin-left: 2px;
-}
-
-/* ---- v3：推荐定投方式块（替换 v2.x 的 .invest-calc-today-rec 大块） ---- */
-.invest-calc-buy-method {
-  padding: 10px 12px;
-  margin: 8px 0 0;
-  border-radius: var(--radius-input);
-  background: var(--accent-soft);
-  color: var(--accent-deeper);
-  border-left: 3px solid var(--accent);
-}
-.invest-calc-buy-method-title {
-  font-size: 13px;
-  font-weight: 500;
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.invest-calc-buy-method-total {
-  font-family: var(--font-num);
-  font-size: 20px;
+  font-size: 15px;
   font-weight: 700;
   color: var(--accent-deep);
-}
-.invest-calc-buy-method-desc {
-  font-size: 12px;
-  margin-top: 4px;
-  line-height: 1.5;
-  color: var(--text-2);
-}
-.invest-calc-buy-method-note {
-  font-size: 11px;
-  margin-top: 4px;
-  font-style: italic;
-  color: var(--text-3);
 }
 
 /* ---- v3：推荐卖出块（仅 showSellInRebalance=true 时显示） ---- */
@@ -2995,56 +2964,8 @@ body[data-sidebar="off"] .expand-sidebar { display: none !important; }
 .invest-calc-dev-ok    { color: var(--ok);   font-family: var(--font-num); font-weight: 600; }
 .invest-calc-dev-warn  { color: var(--warn); font-family: var(--font-num); font-weight: 600; }
 .invest-calc-dev-danger{ color: var(--err);  font-family: var(--font-num); font-weight: 600; }
-/* 状态判断区（与色码一致的语义）*/
-.invest-calc-status {
-  padding: 8px 10px;
-  border-radius: var(--radius-input);
-  margin-bottom: 8px;
-  font-size: 13px;
-  font-weight: 500;
-}
-.invest-calc-status-ok {
-  background: var(--accent-soft);
-  color: var(--accent-deeper);
-  border-left: 3px solid var(--ok);
-}
-.invest-calc-status-warn {
-  background: rgba(180, 83, 9, 0.08);
-  color: var(--warn);
-  border-left: 3px solid var(--warn);
-}
-.invest-calc-status-warn-strong {
-  background: rgba(180, 83, 9, 0.14);
-  color: var(--warn);
-  border-left: 3px solid var(--warn);
-  font-weight: 600;
-}
-.invest-calc-status-danger {
-  background: var(--err-soft);
-  color: var(--err);
-  border-left: 3px solid var(--err);
-  font-weight: 600;
-}
-.invest-calc-actions {
-  margin: 6px 0 8px;
-  padding-left: 24px;
-  font-size: 13px;
-  color: var(--text);
-  line-height: 1.6;
-}
-.invest-calc-actions li { padding: 2px 0; }
-.invest-calc-actions strong {
-  font-family: var(--font-body);
-  color: var(--accent-deep);
-  font-weight: 600;
-}
-.invest-calc-tip {
-  font-size: 12px;
-  color: var(--text-3);
-  font-style: italic;
-  margin-top: 4px;
-  padding-left: 4px;
-}
+/* ---- v3.3 移除：.invest-calc-status* / .invest-calc-actions / .invest-calc-tip
+   （操作建议状态块——一次性买卖金额列表已删除，偏离靠每日定投自动弥补） ---- */
 .invest-calc-rebalance-row {
   display: flex;
   align-items: center;

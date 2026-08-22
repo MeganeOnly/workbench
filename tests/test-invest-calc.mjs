@@ -1,7 +1,9 @@
-// 投资计算器 v2 端到端测试：
+// 投资计算器 v2/v3.3 端到端测试：
 // 验证流程：切到 invest 模式 → 计算器卡渲染（视图模式，外面无 input）→
 //          点 ⚙ 设置 → 编辑模式（输入面板 + 实时警告）→
 //          改目标权重触发警告（不阻止保存）→ 保存持仓 → 标记再平衡
+// v3.3 变更验证：视图不再有"推荐定投方式"块 + 无"操作建议"状态块；
+//          每日定投 = 固定总额按缺口比例分配（超配 = 0，合计 = dailyPerWorkday）；全达标回退按目标权重
 //
 // 用法：node tests/test-invest-calc.mjs（要求 workbench 在 3180 端口运行）
 
@@ -33,6 +35,24 @@ async function main() {
   } catch (e) {
     console.error('[FAIL] 服务未启动: ' + e.message);
     process.exit(2);
+  }
+
+  // 捕获测试前配置 + 持仓，最后 finally 恢复——避免测试把用户的 daily/持仓/权重清掉（v3.3 改进）
+  let beforeConfig = { targets: { '红利低波50': 20, '沪港深成长红利低波动': 25, '中证全指': 15, '纳斯达克100': 40 }, dailyPerWorkday: 180 };
+  let beforeHoldings = {};
+  try {
+    const beforeResp = await fetch(BASE + '/api/invest-calc').then((r) => r.json());
+    if (beforeResp.ok && beforeResp.data) {
+      beforeConfig = {
+        targets: beforeResp.data.targets,
+        dailyPerWorkday: beforeResp.data.dailyPerWorkday,
+        showSellInRebalance: beforeResp.data.showSellInRebalance,
+      };
+      beforeHoldings = {};
+      (beforeResp.data.rows || []).forEach((r) => { beforeHoldings[r.name] = r.amount; });
+    }
+  } catch (e) {
+    console.error('[WARN] 读取测试前投资配置失败（恢复将使用默认值）: ' + e.message);
   }
 
   const edgePath = EDGE_CANDIDATES.find((p) => fs.existsSync(p));
@@ -186,8 +206,9 @@ async function main() {
     });
     await sleep(500);
 
-    // 5) 视图模式渲染内容：总市值/推荐定投方式/可选卖出/rebalance 按钮
-    //     注：table 和 rebalance button 仅当 total > 0（用户已录入持仓）才渲染——此断言先看头部+推荐定投
+    // 5) 视图模式渲染内容：头部 + 表格/合计行/卖出区/rebalance 按钮
+    //     v3.3 变更：不再有"推荐定投方式"块（hasBuyMethod 应为 false）
+    //     注：table / 合计行 / rebalance button 仅当 total > 0（用户已录入持仓）才渲染
     const viewSummary = await send('Runtime.evaluate', {
       expression: `(function(){
         const view = document.querySelector('.card[data-id="sys-invest-calc"] .invest-calc-view');
@@ -196,6 +217,7 @@ async function main() {
           hasView: true,
           hasHeader: !!view.querySelector('.invest-calc-header'),
           hasBuyMethod: !!view.querySelector('.invest-calc-buy-method'),
+          hasBuyTotal: !!view.querySelector('.invest-calc-buy-total'),
           hasSellSection: !!view.querySelector('.invest-calc-sell-section'),
           hasTable: !!view.querySelector('.invest-calc-table'),
           hasRebBtn: !!view.querySelector('.invest-calc-rebalanced'),
@@ -205,7 +227,7 @@ async function main() {
       returnByValue: true,
     });
     const vs = viewSummary.result?.result?.value;
-    if (vs && vs.hasView && vs.hasHeader && vs.hasBuyMethod) pass('视图模式含头部 + 推荐定投方式');
+    if (vs && vs.hasView && vs.hasHeader && vs.hasBuyMethod === false) pass('视图模式含头部，且无"推荐定投方式"块（v3.3）');
     else fail('视图模式核心组件缺失', JSON.stringify(vs));
     // 录入持仓后再断言 table + rebalance button
     if (vs.total === 0) {
@@ -234,27 +256,57 @@ async function main() {
     });
     await sleep(800);
 
-    // 7) 验证 emergency 状态条（红色）
-    const statusClass = await send('Runtime.evaluate', {
-      expression: `document.querySelector('.card[data-id="sys-invest-calc"] .invest-calc-status')?.className`,
+    // 7) v3.3 验证：操作建议状态块（一次性买卖金额列表）已删除
+    const statusGone = await send('Runtime.evaluate', {
+      expression: `!document.querySelector('.card[data-id="sys-invest-calc"] .invest-calc-status')`,
       returnByValue: true,
     });
-    if (statusClass.result?.result?.value?.includes('invest-calc-status-danger')) {
-      pass('视图模式显示 emergency 状态条（红色）');
+    if (statusGone.result?.result?.value === true) {
+      pass('v3.3：视图不再显示操作建议状态块（一次性买入/卖出金额列表已移除）');
     } else {
-      fail('应显示 danger 状态', '实际: ' + JSON.stringify(statusClass.result?.result?.value));
+      fail('v3.3 应无 .invest-calc-status', JSON.stringify(statusGone.result?.result?.value));
     }
 
-    // 8) 验证推荐定投方式（v3：替换 v2 的"今日推荐定投"，去掉 isWorkday 分支）
-    const buyMethod = await send('Runtime.evaluate', {
-      expression: `document.querySelector('.card[data-id="sys-invest-calc"] .invest-calc-buy-method')?.textContent`,
+    // 8) v3.3 验证：每日定投 = 固定总额按缺口比例分配（偏离弥补定投法）
+    //    当前持仓 红利10000/沪港深15000/中证10000/纳指65000（total=10 万）：
+    //      缺口 = 红利10000 / 沪港深10000 / 中证5000 / 纳指0（超配+25%）
+    //    → 超配的纳指买入 = 0；各买入合计 === dailyPerWorkday；表格下有"每工作日合计"行
+    await send('Runtime.evaluate', {
+      expression: `WB.renderSystemCard('sys-invest-calc')`,
       returnByValue: true,
     });
-    if (buyMethod.result?.result?.value && buyMethod.result.result.value.includes('推荐定投方式')) {
-      pass('推荐定投方式已渲染（v3）');
-    } else {
-      fail('推荐定投方式应渲染', JSON.stringify(buyMethod.result?.result?.value));
-    }
+    await sleep(800);
+    const allocCheck = await send('Runtime.evaluate', {
+      expression: `(async function(){
+        const r = await fetch('/api/invest-calc', { cache: 'no-store' });
+        const j = await r.json();
+        const plan = j.data.rebalancePlan || {};
+        const rows = j.data.rows || [];
+        const buyMap = {};
+        (plan.buys || []).forEach((b) => { buyMap[b.asset] = b; });
+        const nasdaq = rows.find((x) => x.name === '纳斯达克100');
+        const daily = j.data.dailyPerWorkday;
+        const totalBuy = (plan.buys || []).reduce((s, b) => s + (b.amount || 0), 0);
+        const nasdaqBuy = buyMap['纳斯达克100'] ? buyMap['纳斯达克100'].amount : null;
+        const view = document.querySelector('.card[data-id="sys-invest-calc"] .invest-calc-view');
+        return {
+          daily, totalBuy,
+          nasdaqDeviation: nasdaq ? nasdaq.deviation : null,
+          nasdaqBuy,
+          footer: view.querySelector('.invest-calc-buy-total')?.textContent || null,
+          hasBuyMethodBlock: !!view.querySelector('.invest-calc-buy-method'),
+        };
+      })()`,
+      returnByValue: true,
+      awaitPromise: true,
+    });
+    const ac = allocCheck.result?.result?.value;
+    let allocOk = true;
+    if (ac.hasBuyMethodBlock) { fail('推荐定投方式块应已删除'); allocOk = false; }
+    if (ac.totalBuy !== ac.daily) { fail('买入合计应 = dailyPerWorkday', JSON.stringify(ac)); allocOk = false; }
+    if (!ac.footer || !ac.footer.includes('每工作日合计')) { fail('应显示每工作日合计行', JSON.stringify(ac)); allocOk = false; }
+    if (ac.nasdaqDeviation > 0 && ac.nasdaqBuy !== 0) { fail('超配的纳指买入应为 0', JSON.stringify(ac)); allocOk = false; }
+    if (allocOk) pass('v3.3：固定总额按缺口分配（纳指超配=0 · 合计=daily · 显示合计行）');
     // 8.5) 验证卖出条目（showSellInRebalance=true 时应显示）—— 这是用户 v3 反馈的核心需求
     const sellSection = await send('Runtime.evaluate', {
       expression: `(() => {
@@ -476,7 +528,6 @@ async function main() {
         const rec = WB.cardCache.get('sys-invest-calc');
         return {
           hasSellSection: !!view.querySelector('.invest-calc-sell-section'),
-          buyMethodNote: view.querySelector('.invest-calc-buy-method-note')?.textContent,
           hasSellCol: !!view.querySelector('th:nth-child(6)'),
           dataShowSell: rec.data?.showSellInRebalance,
           planShowSell: rec.data?.rebalancePlan?.showSellInRebalance,
@@ -530,7 +581,28 @@ async function main() {
       fail('lastRebalance 应更新', JSON.stringify(afterRebData.data));
     }
 
-    // 16) 页面无 JS 异常
+    // 16) v3.3 回退验证：全部达标（当前 = 目标）时回退按目标权重分配，买入合计仍 = daily
+    await fetch(BASE + '/api/invest-calc/holdings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        holdings: { '红利低波50': 20000, '沪港深成长红利低波动': 25000, '中证全指': 15000, '纳斯达克100': 40000 },
+      }),
+    });
+    await sleep(500);
+    const fallback = await fetch(BASE + '/api/invest-calc').then((r) => r.json());
+    const fbPlan = fallback.data.rebalancePlan || {};
+    const fbDaily = fallback.data.dailyPerWorkday;
+    const fbBuys = {};
+    (fbPlan.buys || []).forEach((b) => { fbBuys[b.asset] = b.amount; });
+    const fbSum = Object.values(fbBuys).reduce((s, v) => s + v, 0);
+    if (fbSum === fbDaily && fbBuys['纳斯达克100'] > 0) {
+      pass('v3.3 回退：全部达标时按目标权重分配（合计 ' + fbSum + ' = daily ' + fbDaily + '）');
+    } else {
+      fail('全部达标应回退按目标权重分配', JSON.stringify({ fbPlan, fbDaily, fbBuys, fbSum }));
+    }
+
+    // 17) 页面无 JS 异常
     if (pageErrors.length) {
       fail('页面 JS 异常', pageErrors.join(' | '));
     } else {
@@ -539,20 +611,17 @@ async function main() {
   } finally {
     if (ws) ws.close();
     try { edge.kill(); } catch {}
-    // 清理：恢复 holdings 为空 + targets 回默认（避免污染用户数据）
+    // 清理：恢复测试前配置 + 持仓（v3.3 改为捕获-恢复，避免覆盖用户数据）
     try {
       await fetch(BASE + '/api/invest-calc/holdings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ holdings: {} }),
+        body: JSON.stringify({ holdings: beforeHoldings }),
       });
       await fetch(BASE + '/api/invest-calc/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          targets: { '红利低波50': 20, '沪港深成长红利低波动': 25, '中证全指': 15, '纳斯达克100': 40 },
-          dailyPerWorkday: 100,
-        }),
+        body: JSON.stringify(beforeConfig),
       });
     } catch {}
   }
