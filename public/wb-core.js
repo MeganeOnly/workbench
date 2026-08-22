@@ -40,9 +40,8 @@
     'sys-dida-focus':{ id: 'sys-dida-focus', name: '滴答专注',     size: 'small', kind: 'stat' },
     'sys-minimax':   { id: 'sys-minimax',   name: 'MiniMax 套餐',  size: 'wide',  kind: 'minimax' },
     'sys-rss':       { id: 'sys-rss',       name: 'RSS 订阅',      size: 'wide',  kind: 'rss' },
-    // 投资方案卡（v1.x 重做后：1 计算器 + 1 硬约束；其余 3 张被计算器取代）
+    // 投资方案卡（v2：仅 1 张计算器；硬约束已删除，警告搬进设置面板）
     'sys-invest-calc':  { id: 'sys-invest-calc',  name: '投资计算器',   size: 'wide',  kind: 'invest-calc', mode: 'invest' },
-    'sys-invest-rules': { id: 'sys-invest-rules', name: '硬约束',       size: 'small', kind: 'invest-info', mode: 'invest' },
   };
 
   // ===== 卡片图标 =====
@@ -63,9 +62,8 @@
     'sys-dsh-sessions': '◉',
     'sys-minimax': 'Ⓜ',
     'sys-rss': '≡',
-    // 投资方案卡（v1.x 重做后 2 张：计算器 + 硬约束；避免与已有重复）
+    // 投资方案卡（v2：仅计算器）
     'sys-invest-calc':  'Σ',   // 大写 Sigma（区别于其它字符）
-    'sys-invest-rules': '⚠',
   };
 
   // ---- 卡片图标：按钮带 icon 字段（服务端检测 public/icons/<id>.ico 是否存在后返回）

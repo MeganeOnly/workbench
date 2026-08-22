@@ -50,8 +50,8 @@
     return [...func,
       'sys-balance', 'sys-status', 'sys-dsh-sessions', 'sys-bookmarks',
       'sys-dida-today', 'sys-dida-focus', 'sys-minimax', 'sys-rss',
-      // 投资方案卡（v1.x：计算器主卡 + 硬约束警示卡）
-      'sys-invest-calc', 'sys-invest-rules',
+      // 投资方案卡（v2：仅计算器主卡）
+      'sys-invest-calc',
     ];
   }
 
@@ -260,27 +260,28 @@
         '<div class="rss-list"></div>';
       refs.list = el.querySelector('.rss-list');
     } else if (id === 'sys-invest-calc') {
-      // 投资计算器（v1.x）：目标 / 当前 / 偏差 / 状态判断 / 操作步骤
+      // 投资计算器（v2）：外部只看结果，点 [⚙ 设置] 进编辑模式
+      // 卡片整体分两块：view-body（默认显示结果）+ edit-body（点击后覆盖显示输入）
+      // 通过 rec.editing 状态切换；不移动卡片 DOM，扩展高度由 CSS 处理
       const def = SYS_CARDS[id];
       const title = (def && def.name) || id;
       el.innerHTML =
-        '<div class="card-head"><h3><span class="card-icon"></span><span class="card-title-text"></span></h3></div>' +
+        '<div class="card-head"><h3><span class="card-icon"></span><span class="card-title-text"></span></h3>' +
+        '<button type="button" class="invest-calc-settings-btn" title="点此打开设置（编辑目标/持仓/定投额）">⚙ 设置</button>' +
+        '</div>' +
         dragHint +
-        '<div class="invest-calc-body"><div class="invest-calc-loading">加载中...</div></div>';
+        '<div class="invest-calc-view"><div class="invest-calc-loading">加载中...</div></div>' +
+        '<div class="invest-calc-edit" style="display:none"></div>';
       refs.titleText = el.querySelector('.card-title-text');
       refs.titleText.textContent = title;
-      refs.body = el.querySelector('.invest-calc-body');
-    } else if (id.startsWith('sys-invest-')) {
-      // 投资方案卡通用模板（仅 sys-invest-rules 用）：标题 + 容器 + sections 占位
-      const def = SYS_CARDS[id];
-      const title = (def && def.name) || id;
-      el.innerHTML =
-        '<div class="card-head"><h3><span class="card-icon"></span><span class="card-title-text"></span></h3></div>' +
-        dragHint +
-        '<div class="invest-info-body"><div class="invest-info-loading">加载中...</div></div>';
-      refs.titleText = el.querySelector('.card-title-text');
-      refs.titleText.textContent = title;
-      refs.body = el.querySelector('.invest-info-body');
+      refs.view = el.querySelector('.invest-calc-view');
+      refs.edit = el.querySelector('.invest-calc-edit');
+      refs.settingsBtn = el.querySelector('.invest-calc-settings-btn');
+      // 点击 ⚙ 设置按钮 → 进编辑模式（不冒泡到卡片）
+      refs.settingsBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openInvestEdit(rec);
+      });
     }
     applyCardIcon(el.querySelector('.card-icon'), { id });
     const rec = { el, refs, current: null };
@@ -509,139 +510,86 @@
     } else if (id === 'sys-rss') {
       renderRssList(refs.list);
     } else if (id === 'sys-invest-calc') {
-      // 投资计算器：拉 /api/invest-calc → 渲染目标/当前/偏差/状态
-      // 不走 investCache（用户输入会改 holdings.json，需要实时读；fetchJSON 自带缓存语义不强）
+      // 投资计算器（v2）：拉 /api/invest-calc → 渲染视图模式（默认）或保持编辑模式（已打开）
+      // 用户编辑中时不重新拉数据，避免正在输入被覆盖
+      const rec = cardCache.get(id);
+      if (rec && rec.editing) return; // 编辑模式下不重渲染视图
       fetchJSON('/api/invest-calc').then((resp) => {
         if (!resp || !resp.ok || !resp.data) {
-          if (refs.body) refs.body.innerHTML = '<div class="invest-calc-empty">方案加载失败</div>';
+          if (refs.view) refs.view.innerHTML = '<div class="invest-calc-empty">方案加载失败</div>';
           return;
         }
-        renderInvestCalculator(refs, resp.data);
+        // 保存数据到 rec 供编辑模式使用
+        const r = cardCache.get(id);
+        if (r) r.data = resp.data;
+        renderInvestCalcView(refs, resp.data);
       }).catch(() => {
-        if (refs.body) refs.body.innerHTML = '<div class="invest-calc-empty">方案加载失败</div>';
-      });
-    } else if (id.startsWith('sys-invest-')) {
-      // 通用投资方案卡渲染：从服务端拉 JSON → 渲染 sections
-      // 简单内存缓存：5 分钟内复用；用户修改 JSON 后 Ctrl+F5 强制刷新
-      const cached = WB.investCache && WB.investCache[id];
-      if (cached && (Date.now() - cached.ts) < 5 * 60 * 1000) {
-        renderInvestInfoCard(refs, cached.data);
-        return;
-      }
-      fetchJSON('/api/invest/' + id).then((resp) => {
-        if (!resp || !resp.ok) {
-          if (refs.body) refs.body.innerHTML = '<div class="invest-info-empty">方案加载失败</div>';
-          return;
-        }
-        if (!WB.investCache) WB.investCache = {};
-        WB.investCache[id] = { ts: Date.now(), data: resp.data };
-        renderInvestInfoCard(refs, resp.data);
-      }).catch(() => {
-        if (refs.body) refs.body.innerHTML = '<div class="invest-info-empty">方案加载失败</div>';
+        if (refs.view) refs.view.innerHTML = '<div class="invest-calc-empty">方案加载失败</div>';
       });
     }
   }
 
-  // ===== 投资方案卡通用渲染 =====
-  // sections 每条支持两种形态：lines（项目列表）或 table（键值对表格；含可选 note 列）
-  function renderInvestInfoCard(refs, data) {
-    if (!refs || !refs.body) return;
-    if (data && data._missing) {
-      refs.body.innerHTML = '<div class="invest-info-empty">方案文件缺失，请联系维护者创建对应的 JSON 数据文件</div>';
-      return;
-    }
-    const sections = (data && data.sections) || [];
-    if (!sections.length) {
-      refs.body.innerHTML = '<div class="invest-info-empty">方案内容为空</div>';
-      return;
-    }
-    const html = sections.map((sec) => {
-      const title = sec.title
-        ? '<div class="invest-section-title">' + escapeHtml(sec.title) + '</div>'
-        : '';
-      let body = '';
-      if (Array.isArray(sec.lines) && sec.lines.length) {
-        body = '<ul class="invest-section-lines">' +
-          sec.lines.map((line) => '<li>' + escapeHtml(line) + '</li>').join('') +
-          '</ul>';
-      }
-      if (Array.isArray(sec.table) && sec.table.length) {
-        body += '<table class="invest-section-table"><tbody>' +
-          sec.table.map((row) => {
-            const label = '<th scope="row">' + escapeHtml(row.label || '') + '</th>';
-            const value = '<td>' + escapeHtml(row.value || '') + '</td>';
-            const note = row.note ? '<td class="invest-note-cell">' + escapeHtml(row.note) + '</td>' : '';
-            return '<tr>' + label + value + note + '</tr>';
-          }).join('') +
-          '</tbody></table>';
-      }
-      return '<div class="invest-section">' + title + body + '</div>';
-    }).join('');
-    refs.body.innerHTML = html;
-  }
-
-  WB.renderInvestInfoCard = renderInvestInfoCard;
-
-  // ===== 投资计算器渲染 =====
-  // data 形态：{ targets, rows:[{name,target,amount,currentPct,deviation}], total, status, actions, lastRebalance, nextCheck }
-  // status: 'ok' | 'threshold' | 'forced' | 'emergency'
-  // actions: [{type:'sell'|'buy', asset, amount}]
-  function renderInvestCalculator(refs, data) {
-    if (!refs || !refs.body) return;
-    const targets = data.targets || {};
+  // ===== 投资计算器 v2 渲染 =====
+  // 设计：
+  //   - 视图模式（默认）：只显示结果（总市值 / 当前比例 / 偏差 / 今日推荐定投 / 再平衡提示 + 操作）
+  //   - 编辑模式（点 ⚙ 设置）：显示输入面板（目标权重带警告 + 当前持仓 + 每日定投额 + 工作日）
+  //   - 硬约束已删除；纳指 > 40% / 双红利低波合计 > 45% 在编辑模式标红警告，**不阻止**保存
+  //   - 数据接口：/api/invest-calc（GET）+ /api/invest-calc/config（POST）+ /api/invest-calc/holdings（POST）+ /api/invest-calc/rebalanced（POST）
+  // 视图模式（passive）：外面只能看到结果，没有任何 input
+  function renderInvestCalcView(refs, data) {
+    if (!refs || !refs.view) return;
     const rows = data.rows || [];
     const total = data.total || 0;
     const status = data.status || 'ok';
     const actions = data.actions || [];
     const lastRebalance = data.lastRebalance || null;
     const nextCheck = data.nextCheck || null;
-    // 资产顺序：data.rows 已经按 targets 顺序排好
-    // 1. 目标权重表
-    const targetsHtml = '<div class="invest-calc-section">' +
-      '<div class="invest-calc-section-title">目标权重</div>' +
-      '<table class="invest-calc-table">' +
-        rows.map((r) => '<tr><th>' + escapeHtml(r.name) + '</th><td class="invest-calc-pct">' + r.target + '%</td></tr>').join('') +
-      '</table></div>';
-    // 2. 当前持仓输入（4 个 input）
-    const inputsHtml = '<div class="invest-calc-section">' +
-      '<div class="invest-calc-section-title">当前持仓（输入金额 ¥）</div>' +
-      '<table class="invest-calc-table">' +
-        rows.map((r, i) => '<tr><th>' + escapeHtml(r.name) + '</th>' +
-          '<td><input type="number" min="0" step="100" class="invest-calc-input" data-asset="' + escapeHtml(r.name) + '" value="' + (r.amount || 0) + '" /></td></tr>').join('') +
-      '</table>' +
-      '<div class="invest-calc-actions-row">' +
-        '<span class="invest-calc-total">总市值 ¥' + total.toLocaleString() + '</span>' +
-        '<button class="invest-calc-save">保存</button>' +
-      '</div></div>';
-    // 3. 当前占比 vs 目标（带偏差色码）
-    let statusBadge = '';
-    if (status === 'emergency') statusBadge = 'danger-strong';
-    else if (status === 'forced') statusBadge = 'warn-strong';
-    else if (status === 'threshold') statusBadge = 'warn';
-    const currentHtml = '<div class="invest-calc-section">' +
-      '<div class="invest-calc-section-title">当前占比 vs 目标</div>' +
-      (total > 0
-        ? '<table class="invest-calc-table"><thead><tr><th></th><th>当前</th><th>目标</th><th>偏差</th></tr></thead><tbody>' +
-            rows.map((r) => {
-              const dev = r.deviation || 0;
-              let devClass = '';
-              if (Math.abs(dev) > 10) devClass = 'invest-calc-dev-danger';
-              else if (Math.abs(dev) > 5) devClass = 'invest-calc-dev-warn';
-              else devClass = 'invest-calc-dev-ok';
-              return '<tr><th>' + escapeHtml(r.name) + '</th>' +
-                '<td>' + r.currentPct + '%</td>' +
-                '<td>' + r.target + '%</td>' +
-                '<td class="' + devClass + '">' + (dev > 0 ? '+' : '') + dev + '%</td></tr>';
-            }).join('') + '</tbody></table>'
-        : '<div class="invest-calc-empty">请输入持仓金额开始计算</div>') +
-      '</div>';
-    // 4. 状态判断 + 操作步骤
+    const todayRec = data.todayRecommendation || { isWorkday: true, total: 0, perAsset: [], note: '' };
+    // 把服务端 perAsset 数组按 rows 顺序排成同名查找表
+    const perAssetMap = {};
+    (todayRec.perAsset || []).forEach((p) => { perAssetMap[p.asset] = p.amount; });
+    // 1. 当前占比 vs 目标（4 列：当前 / 目标 / 偏差 / 今日推荐）
+    let rowsHtml;
+    if (total > 0) {
+      rowsHtml = '<table class="invest-calc-table"><thead><tr><th></th><th>当前</th><th>目标</th><th>偏差</th><th>今日推荐</th></tr></thead><tbody>' +
+        rows.map((r) => {
+          const dev = r.deviation || 0;
+          let devClass = '';
+          if (Math.abs(dev) > 10) devClass = 'invest-calc-dev-danger';
+          else if (Math.abs(dev) > 5) devClass = 'invest-calc-dev-warn';
+          else devClass = 'invest-calc-dev-ok';
+          const recAmt = perAssetMap[r.name] || 0;
+          let recClass = '';
+          // 超配（正偏差 > 5%）→ 不需要买，反而需要卖
+          if (dev > 5) recClass = 'invest-calc-rec-sell';
+          return '<tr><th>' + escapeHtml(r.name) + '</th>' +
+            '<td>' + r.currentPct + '%</td>' +
+            '<td>' + r.target + '%</td>' +
+            '<td class="' + devClass + '">' + (dev > 0 ? '+' : '') + dev + '%</td>' +
+            '<td class="' + recClass + '">' + (recAmt > 0 ? '¥' + recAmt : '—') + '</td></tr>';
+        }).join('') + '</tbody></table>';
+    } else {
+      // 无当前持仓：提示先去设置面板录入
+      rowsHtml = '<div class="invest-calc-empty">尚未录入当前持仓，点 [⚙ 设置] 开始</div>';
+    }
+    // 2. 今日推荐总额（按工作日 vs 非工作日）
+    const todayRecHtml = todayRec.isWorkday
+      ? '<div class="invest-calc-today-rec workday">' +
+          '今日推荐定投：<strong>¥' + (todayRec.total || 0) + '</strong>' +
+          '<span class="invest-calc-today-meta">（工作日 · 预计每个工作日 ¥' + (data.dailyPerWorkday || 0) + '）</span>' +
+        '</div>' +
+        '<div class="invest-calc-today-note">' + escapeHtml(todayRec.note || '') + '</div>'
+      : '<div class="invest-calc-today-rec offday">' +
+          '今日推荐定投：<strong>¥0</strong>' +
+          '<span class="invest-calc-today-meta">（非工作日 · 下个工作日预计 ¥' + (data.dailyPerWorkday || 0) + '）</span>' +
+        '</div>';
+    // 3. 状态判断 + 操作步骤
     let statusHtml = '';
     if (status === 'ok') {
       statusHtml = '<div class="invest-calc-status invest-calc-status-ok">✓ 当前比例在 ±5% 阈值内，无需再平衡</div>';
     } else if (status === 'threshold') {
       statusHtml = '<div class="invest-calc-status invest-calc-status-warn">' +
-        '⚠ 触发季度再平衡阈值，操作建议：</div>' +
+        '⚠ 触发季度再平衡阈值（5%~10%），操作建议：</div>' +
         '<ol class="invest-calc-actions">' +
           actions.map((a) => {
             const verb = a.type === 'sell' ? '卖出' : '买入';
@@ -668,38 +616,22 @@
           }).join('') +
         '</ol>';
     }
-    // 5. lastRebalance + 标记按钮
-    const lastRebHtml = '<div class="invest-calc-section invest-calc-rebalance-row">' +
-      '<span>上次再平衡：' + (lastRebalance || '未记录') + (nextCheck ? '（下次检查 ' + nextCheck + '）' : '') + '</span>' +
-      '<button class="invest-calc-rebalanced">标记已再平衡</button>' +
+    // 4. 头部元信息 + 上次再平衡 + 标记按钮
+    const headerHtml = '<div class="invest-calc-header">' +
+      '<span class="invest-calc-total">总市值 ¥' + total.toLocaleString() + '</span>' +
+      '<span class="invest-calc-last-reb">上次再平衡：' + (lastRebalance || '未记录') + (nextCheck ? '（下次检查 ' + nextCheck + '）' : '') + '</span>' +
       '</div>';
-    refs.body.innerHTML = targetsHtml + inputsHtml + currentHtml + statusHtml + lastRebHtml;
-    // 6. 绑定交互
-    const saveBtn = refs.body.querySelector('.invest-calc-save');
-    if (saveBtn) {
-      saveBtn.addEventListener('click', async () => {
-        const holdings = {};
-        refs.body.querySelectorAll('.invest-calc-input').forEach((el) => {
-          holdings[el.dataset.asset] = Math.max(0, Number(el.value) || 0);
-        });
-        try {
-          const r = await fetchJSON('/api/invest-calc/holdings', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ holdings }),
-          });
-          if (r && r.ok) {
-            if (WB.showToast) WB.showToast('已保存当前持仓', 'ok');
-            WB.renderSystemCard('sys-invest-calc');
-          } else {
-            if (WB.showToast) WB.showToast('保存失败: ' + (r && r.error || '未知错误'), 'err');
-          }
-        } catch (e) {
-          if (WB.showToast) WB.showToast('保存失败: ' + e.message, 'err');
-        }
-      });
-    }
-    const rebalancedBtn = refs.body.querySelector('.invest-calc-rebalanced');
+    const lastRebHtml = total > 0 ? '<div class="invest-calc-section invest-calc-rebalance-row">' +
+      '<button class="invest-calc-rebalanced">标记已再平衡</button>' +
+      '</div>' : '';
+    refs.view.innerHTML =
+      headerHtml +
+      '<div class="invest-calc-section"><div class="invest-calc-section-title">当前占比 vs 目标</div>' + rowsHtml + '</div>' +
+      todayRecHtml +
+      (statusHtml ? '<div class="invest-calc-section">' + statusHtml + '</div>' : '') +
+      lastRebHtml;
+    // 5. 标记已再平衡按钮
+    const rebalancedBtn = refs.view.querySelector('.invest-calc-rebalanced');
     if (rebalancedBtn) {
       rebalancedBtn.addEventListener('click', async () => {
         try {
@@ -717,7 +649,222 @@
     }
   }
 
-  WB.renderInvestCalculator = renderInvestCalculator;
+  // 打开编辑模式：把 view 隐藏，显示 edit 面板，渲染输入表单
+  function openInvestEdit(rec) {
+    if (!rec || !rec.refs || !rec.refs.edit) return;
+    const data = rec.data || {};
+    const targets = data.targets || {};
+    const rows = data.rows || [];
+    const total = data.total || 0;
+    const dailyPerWorkday = data.dailyPerWorkday || 0;
+    const workdays = Array.isArray(data.workdays) ? data.workdays : [1, 2, 3, 4, 5];
+    // 用一个本地 working copy 暂存用户输入；保存时一并提交
+    const wdSet = new Set(workdays);
+    // 1. 目标权重（带警告：纳指>40% / 双红利低波>45%）
+    const targetsHtml = '<div class="invest-calc-edit-section">' +
+      '<div class="invest-calc-edit-title">目标权重（必须之和 = 100）</div>' +
+      '<div class="invest-calc-targets-list">' +
+      rows.map((r) => {
+        const val = Number(targets[r.name]) || 0;
+        return '<div class="invest-calc-target-row" data-asset="' + escapeHtml(r.name) + '">' +
+          '<span class="invest-calc-target-name">' + escapeHtml(r.name) + '</span>' +
+          '<input type="number" min="0" max="100" step="1" class="invest-calc-target-input" data-asset="' + escapeHtml(r.name) + '" value="' + val + '" />' +
+          '<span class="invest-calc-target-unit">%</span>' +
+        '</div>';
+      }).join('') +
+      '</div>' +
+      '<div class="invest-calc-warnings" id="invest-calc-warnings"></div>' +
+      '</div>';
+    // 2. 当前持仓（4 个 input）
+    const holdingsHtml = '<div class="invest-calc-edit-section">' +
+      '<div class="invest-calc-edit-title">当前持仓（输入金额 ¥）</div>' +
+      '<div class="invest-calc-targets-list">' +
+      rows.map((r) => {
+        return '<div class="invest-calc-target-row" data-asset="' + escapeHtml(r.name) + '">' +
+          '<span class="invest-calc-target-name">' + escapeHtml(r.name) + '</span>' +
+          '<span class="invest-calc-target-unit">¥</span>' +
+          '<input type="number" min="0" step="100" class="invest-calc-holding-input" data-asset="' + escapeHtml(r.name) + '" value="' + (r.amount || 0) + '" />' +
+        '</div>';
+      }).join('') +
+      '</div>' +
+      '<div class="invest-calc-holdings-actions">' +
+        '<span class="invest-calc-total" id="invest-calc-edit-total">总市值 ¥' + total.toLocaleString() + '</span>' +
+        '<button class="invest-calc-holdings-save">保存持仓</button>' +
+      '</div>' +
+      '</div>';
+    // 3. 每日定投（预计每个工作日定投额 + 工作日定义）
+    const workdayNames = ['日', '一', '二', '三', '四', '五', '六'];
+    const workdayHtml = '<div class="invest-calc-edit-section">' +
+      '<div class="invest-calc-edit-title">每日定投</div>' +
+      '<div class="invest-calc-daily-row">' +
+        '<span class="invest-calc-daily-label">预计每个工作日定投额</span>' +
+        '<span class="invest-calc-target-unit">¥</span>' +
+        '<input type="number" min="0" step="10" class="invest-calc-daily-input" value="' + dailyPerWorkday + '" />' +
+      '</div>' +
+      '<div class="invest-calc-daily-row">' +
+        '<span class="invest-calc-daily-label">工作日</span>' +
+        '<div class="invest-calc-workdays">' +
+        [0, 1, 2, 3, 4, 5, 6].map((d) => {
+          const checked = wdSet.has(d);
+          return '<label class="invest-calc-workday-opt' + (checked ? ' active' : '') + '" data-day="' + d + '">' +
+            '<input type="checkbox" ' + (checked ? 'checked' : '') + ' />' +
+            '<span>' + workdayNames[d] + '</span>' +
+          '</label>';
+        }).join('') +
+        '</div>' +
+      '</div>' +
+      '</div>';
+    // 4. 操作行
+    const actionsHtml = '<div class="invest-calc-edit-actions">' +
+      '<button class="invest-calc-config-save">保存配置</button>' +
+      '<button class="invest-calc-config-cancel">取消</button>' +
+      '</div>';
+    rec.refs.edit.innerHTML = targetsHtml + holdingsHtml + workdayHtml + actionsHtml;
+    rec.refs.view.style.display = 'none';
+    rec.refs.edit.style.display = 'block';
+    rec.editing = true;
+    // 绑定编辑模式交互
+    bindInvestEditEvents(rec);
+  }
+
+  // 关闭编辑模式：恢复视图模式，重新拉数据渲染
+  function closeInvestEdit(rec) {
+    if (!rec || !rec.refs) return;
+    rec.refs.view.style.display = 'block';
+    rec.refs.edit.style.display = 'none';
+    rec.editing = false;
+    if (WB.renderSystemCard) WB.renderSystemCard('sys-invest-calc');
+  }
+
+  // 编辑模式交互：实时警告更新 + 持仓保存 + 配置保存 + 取消
+  function bindInvestEditEvents(rec) {
+    const refs = rec.refs;
+    const data = rec.data || {};
+    const targets = data.targets || {};
+    // 1. 目标权重输入变化 → 实时更新警告
+    const updateWarnings = () => {
+      const newTargets = {};
+      refs.edit.querySelectorAll('.invest-calc-target-input').forEach((el) => {
+        newTargets[el.dataset.asset] = Number(el.value) || 0;
+      });
+      const warnings = computeWarningsClient(newTargets);
+      const wEl = refs.edit.querySelector('#invest-calc-warnings');
+      if (!wEl) return;
+      if (warnings.length === 0) {
+        wEl.innerHTML = '';
+      } else {
+        wEl.innerHTML = warnings.map((w) =>
+          '<div class="invest-calc-warning">' + escapeHtml(w.message) + '</div>'
+        ).join('');
+      }
+    };
+    refs.edit.querySelectorAll('.invest-calc-target-input').forEach((el) => {
+      el.addEventListener('input', updateWarnings);
+    });
+    updateWarnings();
+    // 2. 持仓输入变化 → 实时更新总市值
+    const updateTotal = () => {
+      let total = 0;
+      refs.edit.querySelectorAll('.invest-calc-holding-input').forEach((el) => {
+        total += Math.max(0, Number(el.value) || 0);
+      });
+      const totalEl = refs.edit.querySelector('#invest-calc-edit-total');
+      if (totalEl) totalEl.textContent = '总市值 ¥' + total.toLocaleString();
+    };
+    refs.edit.querySelectorAll('.invest-calc-holding-input').forEach((el) => {
+      el.addEventListener('input', updateTotal);
+    });
+    // 3. 工作日切换（视觉态）
+    refs.edit.querySelectorAll('.invest-calc-workday-opt').forEach((opt) => {
+      opt.addEventListener('click', (e) => {
+        // label 包裹的 checkbox；点 label 自动切 checkbox，但 preventDefault 后我们手动切
+        e.preventDefault();
+        const cb = opt.querySelector('input[type="checkbox"]');
+        cb.checked = !cb.checked;
+        opt.classList.toggle('active', cb.checked);
+      });
+    });
+    // 4. 保存持仓（仅更新 holdings，不动 targets/dailyPerWorkday/workdays）
+    const holdingsSaveBtn = refs.edit.querySelector('.invest-calc-holdings-save');
+    if (holdingsSaveBtn) {
+      holdingsSaveBtn.addEventListener('click', async () => {
+        const holdings = {};
+        refs.edit.querySelectorAll('.invest-calc-holding-input').forEach((el) => {
+          holdings[el.dataset.asset] = Math.max(0, Number(el.value) || 0);
+        });
+        try {
+          const r = await fetchJSON('/api/invest-calc/holdings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ holdings }),
+          });
+          if (r && r.ok) {
+            if (WB.showToast) WB.showToast('已保存当前持仓', 'ok');
+            closeInvestEdit(rec); // 关闭编辑模式回到视图，看新数据
+          } else {
+            if (WB.showToast) WB.showToast('保存失败: ' + (r && r.error || '未知错误'), 'err');
+          }
+        } catch (e) {
+          if (WB.showToast) WB.showToast('保存失败: ' + e.message, 'err');
+        }
+      });
+    }
+    // 5. 保存配置（targets + dailyPerWorkday + workdays）
+    const configSaveBtn = refs.edit.querySelector('.invest-calc-config-save');
+    if (configSaveBtn) {
+      configSaveBtn.addEventListener('click', async () => {
+        const newTargets = {};
+        refs.edit.querySelectorAll('.invest-calc-target-input').forEach((el) => {
+          newTargets[el.dataset.asset] = Number(el.value) || 0;
+        });
+        const daily = Number(refs.edit.querySelector('.invest-calc-daily-input').value) || 0;
+        const wd = [];
+        refs.edit.querySelectorAll('.invest-calc-workday-opt').forEach((opt) => {
+          if (opt.querySelector('input[type="checkbox"]').checked) {
+            wd.push(Number(opt.dataset.day));
+          }
+        });
+        try {
+          const r = await fetchJSON('/api/invest-calc/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ targets: newTargets, dailyPerWorkday: daily, workdays: wd }),
+          });
+          if (r && r.ok) {
+            if (WB.showToast) WB.showToast('已保存配置', 'ok');
+            closeInvestEdit(rec);
+          } else {
+            if (WB.showToast) WB.showToast('保存失败: ' + (r && r.error || '未知错误'), 'err');
+          }
+        } catch (e) {
+          if (WB.showToast) WB.showToast('保存失败: ' + e.message, 'err');
+        }
+      });
+    }
+    // 6. 取消
+    const cancelBtn = refs.edit.querySelector('.invest-calc-config-cancel');
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', () => closeInvestEdit(rec));
+    }
+  }
+
+  // 客户端软约束警告（与服务端 computeWarnings 同款——不阻止保存，仅红字提示）
+  //   阈值 40% / 45% 与服务端 INVEST_WARN_NASDAQ_MAX / INVEST_WARN_RED_DUO_MAX 对齐
+  //   客户端复算避免每次 input 都要往返服务端
+  function computeWarningsClient(targets) {
+    const warnings = [];
+    const nasdaq = Number(targets['纳斯达克100']) || 0;
+    if (nasdaq > 40) {
+      warnings.push({ message: '⚠ 纳指占比 ' + nasdaq + '% 超过建议上限 40%，赌注过大' });
+    }
+    const red1 = Number(targets['红利低波50']) || 0;
+    const red2 = Number(targets['沪港深成长红利低波动']) || 0;
+    const redSum = red1 + red2;
+    if (redSum > 45) {
+      warnings.push({ message: '⚠ 双红利低波合计 ' + redSum + '% 超过建议上限 45%，分散性不足' });
+    }
+    return warnings;
+  }
 
   // 简易 HTML 转义（方案 JSON 是本机受信任文件，但渲染仍按习惯转义防 XSS）
   function escapeHtml(s) {

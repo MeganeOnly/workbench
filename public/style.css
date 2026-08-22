@@ -2766,95 +2766,21 @@ body[data-sidebar="off"] .expand-sidebar { display: none !important; }
 }
 
 /* ============================================================
-   投资方案卡（v1.x 5 张共用 kind:'invest-info'）
+   投资方案卡（v2：仅 1 张 sys-invest-calc，view + edit 双模）
+   v1.x 的 sys-invest-rules（硬约束）已删除：警告搬进计算器编辑模式红字
    ============================================================ */
-.invest-info-body {
-  padding: 0 4px 4px;
-  max-height: 360px;
-  overflow-y: auto;
-}
-.invest-info-loading,
-.invest-info-empty {
-  padding: 20px 12px;
-  text-align: center;
-  color: var(--text-3);
-  font-size: 13px;
-}
-.invest-info-empty {
-  font-style: italic;
-}
-.invest-section {
-  margin-bottom: 14px;
-}
-.invest-section:last-child {
-  margin-bottom: 0;
-}
-.invest-section-title {
-  font-family: var(--font-display);
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-2);
-  margin: 4px 0 6px;
-  padding-left: 6px;
-  border-left: 3px solid var(--accent);
-}
-.invest-section-lines {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--text);
-}
-.invest-section-lines li {
-  padding: 3px 0 3px 14px;
-  position: relative;
-}
-.invest-section-lines li::before {
-  content: "·";
-  position: absolute;
-  left: 4px;
-  color: var(--accent);
-  font-weight: 700;
-}
-.invest-section-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-.invest-section-table tr {
-  border-bottom: 1px solid var(--border);
-}
-.invest-section-table tr:last-child {
-  border-bottom: none;
-}
-.invest-section-table th {
-  text-align: left;
-  font-weight: 500;
-  color: var(--text-3);
-  padding: 6px 8px 6px 0;
-  white-space: nowrap;
-  vertical-align: top;
-  width: 1%;
-}
-.invest-section-table td {
-  padding: 6px 0;
-  color: var(--text);
-  vertical-align: top;
-}
-.invest-note-cell {
-  color: var(--text-3);
-  font-size: 12px;
-  padding-left: 12px !important;
-}
 
 /* ============================================================
-   投资计算器（v1.x：sys-invest-calc，1 张可交互卡）
-   设计原则：直接指明怎么做（操作步骤）+ 偏差色码（绿/琥珀/红）
+   投资计算器（v2：sys-invest-calc，view + edit 双模）
+   视图模式：外面只能看结果，没有任何 input
+   编辑模式：点 ⚙ 设置 按钮进，输入目标权重（带警告）+ 当前持仓 + 每日定投
    ============================================================ */
-.invest-calc-body {
+
+/* ---- 视图模式 ---- */
+.invest-calc-view,
+.invest-calc-edit {
   padding: 0 4px 4px;
-  max-height: 540px;        /* 比 invest-info 高（计算器内容多） */
+  max-height: 540px;        /* 卡片内高度（视图+编辑都不超过此） */
   overflow-y: auto;
 }
 .invest-calc-loading,
@@ -2865,6 +2791,91 @@ body[data-sidebar="off"] .expand-sidebar { display: none !important; }
   font-size: 13px;
 }
 .invest-calc-empty { font-style: italic; }
+
+/* ---- 头部元信息（视图顶部一行：总市值 + 上次再平衡） ---- */
+.invest-calc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-3);
+  padding: 4px 6px 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.invest-calc-header .invest-calc-total {
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* ---- ⚙ 设置 按钮（卡片标题右侧，触发编辑模式） ---- */
+.invest-calc-settings-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+  padding: 3px 10px;
+  font-family: var(--font-body);
+  font-size: 11px;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.invest-calc-settings-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* ---- 今日推荐定投（视图模式突出显示） ---- */
+.invest-calc-today-rec {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 12px;
+  margin: 8px 0 0;
+  border-radius: var(--radius-input);
+  background: var(--accent-soft);
+  color: var(--accent-deeper);
+  font-size: 14px;
+  font-weight: 500;
+  border-left: 3px solid var(--accent);
+}
+.invest-calc-today-rec strong {
+  font-family: var(--font-num);
+  font-size: 20px;
+  font-weight: 700;
+}
+.invest-calc-today-rec.offday {
+  background: var(--surface-2);
+  color: var(--text-3);
+  border-left-color: var(--border-strong);
+}
+.invest-calc-today-rec.offday strong {
+  color: var(--text-3);
+}
+.invest-calc-today-meta {
+  font-size: 11px;
+  color: var(--text-3);
+  font-weight: 400;
+  font-family: var(--font-body);
+}
+.invest-calc-today-note {
+  font-size: 11px;
+  color: var(--text-3);
+  font-style: italic;
+  margin-top: 4px;
+  padding-left: 6px;
+}
+
+/* ---- 今日推荐列（表格内 cell，超配时变暗——不需要买） ---- */
+.invest-calc-rec-sell {
+  color: var(--text-3);
+  font-family: var(--font-num);
+}
+
+/* ---- 通用 section / table / 偏差色码 / 状态 / 操作 / 再平衡行 ---- */
 .invest-calc-section {
   margin-bottom: 14px;
 }
@@ -2913,47 +2924,11 @@ body[data-sidebar="off"] .expand-sidebar { display: none !important; }
   font-weight: 600;
   color: var(--accent-deep);
 }
-.invest-calc-input {
-  width: 100%;
-  padding: 6px 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-input);
-  font-family: var(--font-num);
-  font-size: 13px;
-  color: var(--text);
-  outline: none;
-  background: var(--surface);
-  transition: border-color .15s ease, box-shadow .15s ease;
-}
-.invest-calc-input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--ring);
-}
-.invest-calc-actions-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 8px;
-  gap: 10px;
-}
 .invest-calc-total {
   font-family: var(--font-num);
   font-size: 12px;
   color: var(--text-3);
 }
-.invest-calc-save {
-  background: var(--accent-deep);
-  color: #fff;
-  border: none;
-  border-radius: var(--radius-btn);
-  padding: 6px 14px;
-  font-family: var(--font-body);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background .15s ease;
-}
-.invest-calc-save:hover { background: var(--accent-deeper); }
 /* 偏差色码（绿 ≤5% / 琥珀 5-10% / 红 >10%）*/
 .invest-calc-dev-ok    { color: var(--ok);   font-family: var(--font-num); font-weight: 600; }
 .invest-calc-dev-warn  { color: var(--warn); font-family: var(--font-num); font-weight: 600; }
@@ -2972,7 +2947,7 @@ body[data-sidebar="off"] .expand-sidebar { display: none !important; }
   border-left: 3px solid var(--ok);
 }
 .invest-calc-status-warn {
-  background: rgba(180, 83, 9, 0.08);   /* var(--warn) soft 琥珀 */
+  background: rgba(180, 83, 9, 0.08);
   color: var(--warn);
   border-left: 3px solid var(--warn);
 }
@@ -2995,9 +2970,7 @@ body[data-sidebar="off"] .expand-sidebar { display: none !important; }
   color: var(--text);
   line-height: 1.6;
 }
-.invest-calc-actions li {
-  padding: 2px 0;
-}
+.invest-calc-actions li { padding: 2px 0; }
 .invest-calc-actions strong {
   font-family: var(--font-body);
   color: var(--accent-deep);
@@ -3013,7 +2986,7 @@ body[data-sidebar="off"] .expand-sidebar { display: none !important; }
 .invest-calc-rebalance-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 10px;
   font-size: 12px;
   color: var(--text-3);
@@ -3033,6 +3006,199 @@ body[data-sidebar="off"] .expand-sidebar { display: none !important; }
   transition: background .15s ease, color .15s ease;
 }
 .invest-calc-rebalanced:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* ============================================================
+   投资计算器 · 编辑模式
+   ============================================================ */
+.invest-calc-edit-section {
+  margin-bottom: 16px;
+}
+.invest-calc-edit-section:last-child { margin-bottom: 0; }
+.invest-calc-edit-title {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin: 6px 0 8px;
+  padding-left: 6px;
+  border-left: 3px solid var(--accent);
+}
+.invest-calc-targets-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.invest-calc-target-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.invest-calc-target-row[data-asset] { /* 普通行 */ }
+.invest-calc-target-name {
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.invest-calc-target-input,
+.invest-calc-holding-input,
+.invest-calc-daily-input {
+  width: 96px;
+  padding: 5px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-input);
+  font-family: var(--font-num);
+  font-size: 13px;
+  color: var(--text);
+  outline: none;
+  background: var(--surface);
+  text-align: right;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.invest-calc-target-input:focus,
+.invest-calc-holding-input:focus,
+.invest-calc-daily-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+.invest-calc-target-unit {
+  color: var(--text-3);
+  font-size: 12px;
+  font-family: var(--font-num);
+}
+/* 持仓输入行 unit 在前（¥ 在名字后面），重新调整列序 */
+.invest-calc-target-row:has(.invest-calc-holding-input) {
+  grid-template-columns: 1fr auto auto;
+}
+.invest-calc-holdings-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+  gap: 10px;
+}
+.invest-calc-holdings-save {
+  background: transparent;
+  color: var(--text-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-btn);
+  padding: 4px 12px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.invest-calc-holdings-save:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* ---- 软约束警告（编辑模式下，输入超阈值实时红字提示，不阻止保存） ---- */
+.invest-calc-warnings {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.invest-calc-warning {
+  font-size: 12px;
+  color: var(--err);
+  background: var(--err-soft);
+  border-left: 3px solid var(--err);
+  padding: 6px 10px;
+  border-radius: var(--radius-input);
+  line-height: 1.5;
+}
+
+/* ---- 每日定投 / 工作日 ---- */
+.invest-calc-daily-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+.invest-calc-daily-row:last-child { margin-bottom: 0; }
+.invest-calc-daily-label {
+  color: var(--text-2);
+  flex: 0 0 auto;
+}
+.invest-calc-workdays {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.invest-calc-workday-opt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-3);
+  cursor: pointer;
+  user-select: none;
+  transition: background .12s ease, color .12s ease, border-color .12s ease;
+}
+.invest-calc-workday-opt input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.invest-calc-workday-opt:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.invest-calc-workday-opt.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* ---- 编辑模式操作行（保存 / 取消） ---- */
+.invest-calc-edit-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.invest-calc-config-save,
+.invest-calc-config-cancel {
+  border-radius: var(--radius-btn);
+  padding: 5px 14px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
+.invest-calc-config-save {
+  background: var(--accent-deep);
+  color: #fff;
+  border: none;
+}
+.invest-calc-config-save:hover {
+  background: var(--accent-deeper);
+}
+.invest-calc-config-cancel {
+  background: transparent;
+  color: var(--text-2);
+  border: 1px solid var(--border-strong);
+}
+.invest-calc-config-cancel:hover {
   background: var(--surface-2);
   color: var(--text);
 }
