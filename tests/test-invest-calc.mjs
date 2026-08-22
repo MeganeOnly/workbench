@@ -290,6 +290,69 @@ async function main() {
     if (editVisible.result?.result?.value === true) pass('点 ⚙ 设置 → 进入编辑模式');
     else fail('点 ⚙ 设置应进编辑模式');
 
+    // 9.5) v3.1：合并保存按钮（一个"保存"按钮同时保存 holdings + config）
+    //     历史 bug：v2.x 有"保存持仓"+"保存配置"两个按钮，用户点"保存配置"以为保存全部
+    //     但只保存 config，holdings 没保存 — 用户原话"当前持仓无法正确保存"
+    //     验证 v3.1：只有一个"保存"按钮，按下后 holdings + config 同时保存
+    const btnCheck = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const oldSave = !!document.querySelector('.invest-calc-edit .invest-calc-holdings-save');
+        const newSave = !!document.querySelector('.invest-calc-edit .invest-calc-config-save');
+        const noteText = document.querySelector('.invest-calc-edit .invest-calc-holdings-note')?.textContent;
+        return { oldSave, newSave, noteText };
+      })()`,
+      returnByValue: true,
+    });
+    const bc = btnCheck.result?.result?.value;
+    if (!bc.oldSave && bc.newSave) {
+      pass('v3.1：合并保存按钮（无"保存持仓"独立按钮，仅"保存"主按钮）');
+    } else {
+      fail('按钮结构错误', JSON.stringify(bc));
+    }
+
+    // 9.6) 验证点"保存"后 holdings + config 一起保存（v3.2 解耦：holdings 先存、config 后存）
+    //     场景：改 holdings 一项（一定能保存）+ 改 target 使 sum≠100（config 应单独失败但不影响 holdings）
+    await send('Runtime.evaluate', {
+      expression: `(function(){
+        // 改第一个 holding input → 99999
+        const h = document.querySelectorAll('.invest-calc-edit .invest-calc-holding-input')[0];
+        h.value = 99999;
+        h.dispatchEvent(new Event('input', { bubbles: true }));
+        // 改最后一个 target input → 50（使 sum≠100：20+25+15+50=110）
+        const t = document.querySelectorAll('.invest-calc-edit .invest-calc-target-input')[3];
+        t.value = 50;
+        t.dispatchEvent(new Event('input', { bubbles: true }));
+        // 读取合计提示
+        const sumEl = document.querySelector('#invest-calc-target-sum');
+        return { sumText: sumEl?.textContent, sumBad: sumEl?.classList.contains('bad') };
+      })()`,
+      returnByValue: true,
+    });
+    await sleep(300);
+    // 拦截 fetch
+    await send('Runtime.evaluate', {
+      expression: `window.__mergeSave = []; const origFetch = window.fetch; window.fetch = function(...args) { return origFetch.apply(this, args).then((r) => { window.__mergeSave.push({ url: args[0], method: args[1]?.method || 'GET', status: r.status }); return r; }); }`,
+      returnByValue: true,
+    });
+    await send('Runtime.evaluate', { expression: `document.querySelector('.invest-calc-edit .invest-calc-config-save')?.click()`, returnByValue: true });
+    await sleep(1500);
+    // 验证合计提示出现（sum=110）
+    const sumCheck = await send('Runtime.evaluate', {
+      expression: `document.querySelector('#invest-calc-target-sum')?.textContent`,
+      returnByValue: true,
+    });
+    if (sumCheck.result?.result?.value?.includes('合计 110%')) pass('v3.2：sum≠100 时红字提示');
+    else fail('sum≠100 应提示', JSON.stringify(sumCheck.result?.result?.value));
+    // 验证 holdings 已保存（即使 config 失败）
+    const afterMerge = await fetch(BASE + '/api/invest-calc').then((r) => r.json());
+    const firstHolding = afterMerge.data.rows[0];
+    if (firstHolding.amount === 99999) pass('v3.2：holdings 99999 已保存（即使 config 校验失败也不受影响）');
+    else fail('holdings 未保存', '实际: ' + firstHolding.amount);
+    // 验证 targets 未保存（sum≠100 → config 单独失败）
+    const lastTarget = afterMerge.data.targets['纳斯达克100'];
+    if (lastTarget !== 50) pass('v3.2：targets 纳指未保存（config sum≠100 单独失败，正确）');
+    else fail('targets 不应保存（sum≠100）', '实际: ' + lastTarget);
+
     // 10) 编辑模式：4 个目标 input + 4 个持仓 input + 1 个每日定投 input（无工作日 toggle，v2.1 移除）
     const editInputs = await send('Runtime.evaluate', {
       expression: `(function(){

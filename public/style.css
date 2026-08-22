@@ -3144,21 +3144,10 @@ body[data-sidebar="off"] .expand-sidebar { display: none !important; }
   margin-top: 8px;
   gap: 10px;
 }
-.invest-calc-holdings-save {
-  background: transparent;
-  color: var(--text-2);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-btn);
-  padding: 4px 12px;
-  font-family: var(--font-body);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background .15s ease, color .15s ease;
-}
-.invest-calc-holdings-save:hover {
-  background: var(--surface-2);
-  color: var(--text);
+.invest-calc-holdings-note {
+  font-size: 11px;
+  color: var(--text-3);
+  font-style: italic;
 }
 
 /* ---- 软约束警告（编辑模式下，输入超阈值实时红字提示，不阻止保存） ---- */
@@ -3176,6 +3165,19 @@ body[data-sidebar="off"] .expand-sidebar { display: none !important; }
   padding: 6px 10px;
   border-radius: var(--radius-input);
   line-height: 1.5;
+}
+
+/* ---- 目标权重合计提示（v3.2：sum≠100 时红字，防止保存 config 失败连带持仓困惑） ---- */
+.invest-calc-target-sum {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-3);
+  font-family: var(--font-num);
+  text-align: right;
+}
+.invest-calc-target-sum.bad {
+  color: var(--err);
+  font-weight: 600;
 }
 
 /* ---- 每日定投 / 工作日 ---- */

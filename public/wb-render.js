@@ -702,6 +702,7 @@
       }).join('') +
       '</div>' +
       '<div class="invest-calc-warnings" id="invest-calc-warnings"></div>' +
+      '<div class="invest-calc-target-sum" id="invest-calc-target-sum"></div>' +
       '</div>';
     // 2. 当前持仓（4 个 input）
     const holdingsHtml = '<div class="invest-calc-edit-section">' +
@@ -717,7 +718,7 @@
       '</div>' +
       '<div class="invest-calc-holdings-actions">' +
         '<span class="invest-calc-total" id="invest-calc-edit-total">总市值 ¥' + total.toLocaleString() + '</span>' +
-        '<button class="invest-calc-holdings-save">保存持仓</button>' +
+        '<span class="invest-calc-holdings-note">下方"保存"会一起保存持仓</span>' +
       '</div>' +
       '</div>';
     // 3. 每日定投（预计每个工作日定投额）
@@ -751,7 +752,7 @@
       '</div>';
     // 5. 操作行
     const actionsHtml = '<div class="invest-calc-edit-actions">' +
-      '<button class="invest-calc-config-save">保存配置</button>' +
+      '<button class="invest-calc-config-save">保存</button>' +
       '<button class="invest-calc-config-cancel">取消</button>' +
       '</div>';
     rec.refs.edit.innerHTML = targetsHtml + holdingsHtml + workdayHtml + rebalanceSettingsHtml + actionsHtml;
@@ -776,7 +777,7 @@
     const refs = rec.refs;
     const data = rec.data || {};
     const targets = data.targets || {};
-    // 1. 目标权重输入变化 → 实时更新警告
+    // 1. 目标权重输入变化 → 实时更新警告 + 总和提示
     const updateWarnings = () => {
       const newTargets = {};
       refs.edit.querySelectorAll('.invest-calc-target-input').forEach((el) => {
@@ -784,13 +785,22 @@
       });
       const warnings = computeWarningsClient(newTargets);
       const wEl = refs.edit.querySelector('#invest-calc-warnings');
-      if (!wEl) return;
-      if (warnings.length === 0) {
-        wEl.innerHTML = '';
-      } else {
-        wEl.innerHTML = warnings.map((w) =>
-          '<div class="invest-calc-warning">' + escapeHtml(w.message) + '</div>'
-        ).join('');
+      if (wEl) {
+        if (warnings.length === 0) {
+          wEl.innerHTML = '';
+        } else {
+          wEl.innerHTML = warnings.map((w) =>
+            '<div class="invest-calc-warning">' + escapeHtml(w.message) + '</div>'
+          ).join('');
+        }
+      }
+      // 总和提示（v3.2：sum≠100 时红字提示，避免点保存后 config 400 连带困惑）
+      const sum = Object.values(newTargets).reduce((s, v) => s + v, 0);
+      const sumEl = refs.edit.querySelector('#invest-calc-target-sum');
+      if (sumEl) {
+        const ok = Math.abs(sum - 100) < 0.5;
+        sumEl.textContent = '合计 ' + sum + '%' + (ok ? '' : '（≠100，配置将无法保存）');
+        sumEl.className = 'invest-calc-target-sum' + (ok ? '' : ' bad');
       }
     };
     refs.edit.querySelectorAll('.invest-calc-target-input').forEach((el) => {
@@ -810,35 +820,19 @@
       el.addEventListener('input', updateTotal);
     });
     // 3. 工作日硬编码 [1,2,3,4,5] 周一到周五，无 UI（前端 v2.1 移除 toggle）
-    // 4. 保存持仓（仅更新 holdings，不动 targets/dailyPerWorkday/workdays）
-    const holdingsSaveBtn = refs.edit.querySelector('.invest-calc-holdings-save');
-    if (holdingsSaveBtn) {
-      holdingsSaveBtn.addEventListener('click', async () => {
+    // 4. 保存（v3.1：合并 v2.x 双按钮为一个；保存 = 持仓 + 配置 一起保存）
+    //     历史：v2.x 有两个按钮（"保存持仓" + "保存配置"）—— 用户原话"当前持仓无法正确保存"
+    //     根因：用户点"保存配置"以为保存全部但只保存 config，holdings 仍为旧值
+    //     修复：去掉"保存持仓"独立按钮，主"保存"按钮 = 持仓 + 配置 一起保存
+    const configSaveBtn = refs.edit.querySelector('.invest-calc-config-save');
+    if (configSaveBtn) {
+      configSaveBtn.addEventListener('click', async () => {
+        // 4.1 收集持仓（从 holding inputs 读取）
         const holdings = {};
         refs.edit.querySelectorAll('.invest-calc-holding-input').forEach((el) => {
           holdings[el.dataset.asset] = Math.max(0, Number(el.value) || 0);
         });
-        try {
-          const r = await fetchJSON('/api/invest-calc/holdings', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ holdings }),
-          });
-          if (r && r.ok) {
-            if (WB.showToast) WB.showToast('已保存当前持仓', 'ok');
-            closeInvestEdit(rec); // 关闭编辑模式回到视图，看新数据
-          } else {
-            if (WB.showToast) WB.showToast('保存失败: ' + (r && r.error || '未知错误'), 'err');
-          }
-        } catch (e) {
-          if (WB.showToast) WB.showToast('保存失败: ' + e.message, 'err');
-        }
-      });
-    }
-    // 5. 保存配置（targets + dailyPerWorkday + showSellInRebalance）
-    const configSaveBtn = refs.edit.querySelector('.invest-calc-config-save');
-    if (configSaveBtn) {
-      configSaveBtn.addEventListener('click', async () => {
+        // 4.2 收集配置
         const newTargets = {};
         refs.edit.querySelectorAll('.invest-calc-target-input').forEach((el) => {
           newTargets[el.dataset.asset] = Number(el.value) || 0;
@@ -848,17 +842,39 @@
         const showSellToggle = refs.edit.querySelector('#invest-calc-show-sell-toggle');
         const showSellInRebalance = showSellToggle ? showSellToggle.getAttribute('aria-checked') === 'true' : true;
         // workdays 不发送（服务端保留 in-memory 当前值；v2.1 删除 UI 后前端不再持有它）
+        // 4.3 保存 = 持仓 + 配置 分两步，解耦（v3.2 修复）：
+        //     历史 bug：v2.x 并行 Promise.all → config 校验失败（targets 之和≠100）会连带
+        //     holdings 显示"保存失败"——用户改持仓却被 config 问题卡住（原话"当前持仓无法正确保存"）
+        //     修复：先保存 holdings（独立，总能成功），再保存 config（有 sum=100 校验）；
+        //     config 失败只提示 config 问题，不影响已保存的 holdings。
         try {
-          const r = await fetchJSON('/api/invest-calc/config', {
+          // 4.4 先保存持仓（独立端点，不依赖 targets 校验）
+          const holdingsRes = await fetchJSON('/api/invest-calc/holdings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ targets: newTargets, dailyPerWorkday: daily, showSellInRebalance }),
+            body: JSON.stringify({ holdings }),
           });
-          if (r && r.ok) {
-            if (WB.showToast) WB.showToast('已保存配置', 'ok');
-            closeInvestEdit(rec);
-          } else {
-            if (WB.showToast) WB.showToast('保存失败: ' + (r && r.error || '未知错误'), 'err');
+          let holdingsOk = !!(holdingsRes && holdingsRes.ok);
+          if (!holdingsOk) {
+            if (WB.showToast) WB.showToast('持仓保存失败: ' + (holdingsRes && holdingsRes.error || '未知错误'), 'err');
+            return;
+          }
+          // 4.5 再保存配置（有 sum=100 校验；失败只提示 config，不覆盖 holdings 已保存）
+          try {
+            const configRes = await fetchJSON('/api/invest-calc/config', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ targets: newTargets, dailyPerWorkday: daily, showSellInRebalance }),
+            });
+            if (configRes && configRes.ok) {
+              if (WB.showToast) WB.showToast('已保存', 'ok');
+              closeInvestEdit(rec);
+            } else {
+              if (WB.showToast) WB.showToast('配置保存失败: ' + (configRes && configRes.error || '未知错误'), 'err');
+            }
+          } catch (configErr) {
+            // config 失败（如 400 sum≠100）：提示但 holdings 已保存，留在编辑模式让用户改 targets
+            if (WB.showToast) WB.showToast('配置保存失败: ' + configErr.message, 'err');
           }
         } catch (e) {
           if (WB.showToast) WB.showToast('保存失败: ' + e.message, 'err');
