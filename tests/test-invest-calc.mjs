@@ -186,8 +186,8 @@ async function main() {
     });
     await sleep(500);
 
-    // 5) 视图模式渲染内容：总市值/今日推荐/rebalance 按钮
-    //     注：table 和 rebalance button 仅当 total > 0（用户已录入持仓）才渲染——此断言先看头部+今日推荐
+    // 5) 视图模式渲染内容：总市值/推荐定投方式/可选卖出/rebalance 按钮
+    //     注：table 和 rebalance button 仅当 total > 0（用户已录入持仓）才渲染——此断言先看头部+推荐定投
     const viewSummary = await send('Runtime.evaluate', {
       expression: `(function(){
         const view = document.querySelector('.card[data-id="sys-invest-calc"] .invest-calc-view');
@@ -195,7 +195,8 @@ async function main() {
         return {
           hasView: true,
           hasHeader: !!view.querySelector('.invest-calc-header'),
-          hasTodayRec: !!view.querySelector('.invest-calc-today-rec'),
+          hasBuyMethod: !!view.querySelector('.invest-calc-buy-method'),
+          hasSellSection: !!view.querySelector('.invest-calc-sell-section'),
           hasTable: !!view.querySelector('.invest-calc-table'),
           hasRebBtn: !!view.querySelector('.invest-calc-rebalanced'),
           total: parseInt(view.querySelector('.invest-calc-total')?.textContent?.replace(/[^0-9]/g, '') || '0'),
@@ -204,7 +205,7 @@ async function main() {
       returnByValue: true,
     });
     const vs = viewSummary.result?.result?.value;
-    if (vs && vs.hasView && vs.hasHeader && vs.hasTodayRec) pass('视图模式含头部/今日推荐');
+    if (vs && vs.hasView && vs.hasHeader && vs.hasBuyMethod) pass('视图模式含头部 + 推荐定投方式');
     else fail('视图模式核心组件缺失', JSON.stringify(vs));
     // 录入持仓后再断言 table + rebalance button
     if (vs.total === 0) {
@@ -244,15 +245,32 @@ async function main() {
       fail('应显示 danger 状态', '实际: ' + JSON.stringify(statusClass.result?.result?.value));
     }
 
-    // 8) 验证今日推荐定投
-    const todayRec = await send('Runtime.evaluate', {
-      expression: `document.querySelector('.card[data-id="sys-invest-calc"] .invest-calc-today-rec')?.textContent`,
+    // 8) 验证推荐定投方式（v3：替换 v2 的"今日推荐定投"，去掉 isWorkday 分支）
+    const buyMethod = await send('Runtime.evaluate', {
+      expression: `document.querySelector('.card[data-id="sys-invest-calc"] .invest-calc-buy-method')?.textContent`,
       returnByValue: true,
     });
-    if (todayRec.result?.result?.value && todayRec.result.result.value.includes('今日推荐定投')) {
-      pass('今日推荐定投已渲染');
+    if (buyMethod.result?.result?.value && buyMethod.result.result.value.includes('推荐定投方式')) {
+      pass('推荐定投方式已渲染（v3）');
     } else {
-      fail('今日推荐定投应渲染', JSON.stringify(todayRec.result?.result?.value));
+      fail('推荐定投方式应渲染', JSON.stringify(buyMethod.result?.result?.value));
+    }
+    // 8.5) 验证卖出条目（showSellInRebalance=true 时应显示）—— 这是用户 v3 反馈的核心需求
+    const sellSection = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const sellEl = document.querySelector('.card[data-id="sys-invest-calc"] .invest-calc-sell-section');
+        if (!sellEl) return { exists: false };
+        const totalText = sellEl.querySelector('.invest-calc-sell-total')?.textContent || '';
+        const items = [...sellEl.querySelectorAll('.invest-calc-sell-list li')].map((li) => li.textContent);
+        return { exists: true, totalText, items };
+      })()`,
+      returnByValue: true,
+    });
+    const ss = sellSection.result?.result?.value;
+    if (ss.exists && ss.totalText.includes('总金额') && ss.items.length > 0 && ss.totalText.includes('25,000')) {
+      pass('推荐卖出条目已渲染（纳指 ¥25,000 · 卖出后总市值 ¥75,000）');
+    } else {
+      fail('推荐卖出条目缺失或金额错', JSON.stringify(ss));
     }
 
     // 9) 点击 ⚙ 设置按钮 → 进入编辑模式
@@ -358,6 +376,77 @@ async function main() {
     } else {
       fail('配置未持久化', JSON.stringify(apiData.data));
     }
+
+    // 14.5) v3 验证：showSellInRebalance 关闭后视图隐藏卖出条目（用户原话"卖出作为平衡方式的条目，我希望能够在设置中选择是否显示"）
+    const saveResp = await fetch(BASE + '/api/invest-calc/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        targets: { '红利低波50': 20, '沪港深成长红利低波动': 25, '中证全指': 15, '纳斯达克100': 40 },
+        dailyPerWorkday: 150,
+        showSellInRebalance: false,
+      }),
+    });
+    const saveJson = await saveResp.json();
+    if (!saveJson.ok) { fail('保存 showSell=false 失败', JSON.stringify(saveJson)); }
+    await sleep(500);
+    // 浏览器内 fetch + 直接调 view 渲染（绕过 renderSystemCard 的异步 fetch 缓存陷阱）
+    await send('Runtime.evaluate', {
+      expression: `(async function(){
+        const r = await fetch('/api/invest-calc', { cache: 'no-store' });
+        const j = await r.json();
+        const rec = WB.cardCache.get('sys-invest-calc');
+        if (rec) {
+          rec.data = j.data;
+          rec.editing = false;
+          WB.renderInvestCalcView(rec.refs, j.data);
+        }
+        return j.data.showSellInRebalance;
+      })()`,
+      returnByValue: true,
+      awaitPromise: true,
+    });
+    await sleep(500);
+    const sellHidden = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const view = document.querySelector('.card[data-id="sys-invest-calc"] .invest-calc-view');
+        const rec = WB.cardCache.get('sys-invest-calc');
+        return {
+          hasSellSection: !!view.querySelector('.invest-calc-sell-section'),
+          buyMethodNote: view.querySelector('.invest-calc-buy-method-note')?.textContent,
+          hasSellCol: !!view.querySelector('th:nth-child(6)'),
+          dataShowSell: rec.data?.showSellInRebalance,
+          planShowSell: rec.data?.rebalancePlan?.showSellInRebalance,
+          planSellsLen: rec.data?.rebalancePlan?.sells?.length,
+        };
+      })()`,
+      returnByValue: true,
+    });
+    if (!sellHidden.result?.result?.value.hasSellSection) pass('showSell=false：视图隐藏卖出条目');
+    else fail('showSell=false：应隐藏卖出条目', JSON.stringify(sellHidden.result?.result?.value));
+
+    // 14.6) 开启后再验证卖条目回来
+    await fetch(BASE + '/api/invest-calc/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        targets: { '红利低波50': 20, '沪港深成长红利低波动': 25, '中证全指': 15, '纳斯达克100': 40 },
+        dailyPerWorkday: 150,
+        showSellInRebalance: true,
+      }),
+    });
+    await sleep(500);
+    await send('Runtime.evaluate', {
+      expression: `WB.renderSystemCard('sys-invest-calc')`,
+      returnByValue: true,
+    });
+    await sleep(800);
+    const sellBack = await send('Runtime.evaluate', {
+      expression: `!!document.querySelector('.card[data-id="sys-invest-calc"] .invest-calc-sell-section')`,
+      returnByValue: true,
+    });
+    if (sellBack.result?.result?.value === true) pass('showSell=true：视图显示卖出条目');
+    else fail('showSell=true：应显示卖出条目');
 
     // 15) 标记已再平衡
     await send('Runtime.evaluate', {

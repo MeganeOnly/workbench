@@ -392,6 +392,7 @@ const DEFAULT_INVEST_CONFIG = {
   },
   dailyPerWorkday: 100,        // 预计每个工作日定投金额（元；用户设置）
   workdays: [1, 2, 3, 4, 5],   // 工作日定义（周日=0；默认周一到周五）
+  showSellInRebalance: true,   // 是否在视图显示"推荐卖出"（用户 v3 反馈：卖出需要挑时间所以默认显示，但允许关掉）
 };
 let holdingsLoadFailed = false;
 let holdings = { holdings: {}, lastRebalance: null };
@@ -463,7 +464,11 @@ try {
         ? parsed.workdays.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6)
         : [];
       const workdays = wd.length ? wd : DEFAULT_INVEST_CONFIG.workdays;
-      investConfig = { targets, dailyPerWorkday, workdays };
+      // showSellInRebalance: 布尔；缺省 true（旧数据无此字段 → 默认显示卖出建议）
+      const showSellInRebalance = typeof parsed.showSellInRebalance === 'boolean'
+        ? parsed.showSellInRebalance
+        : DEFAULT_INVEST_CONFIG.showSellInRebalance;
+      investConfig = { targets, dailyPerWorkday, workdays, showSellInRebalance };
     } else {
       backupCorruptedData(INVEST_PERSONAL_PATH, 'parsed value is not an object');
       investConfigLoadFailed = true;
@@ -510,45 +515,66 @@ function loadTargets() {
 
 // ---- 投资计算器辅助函数 ----
 
-// 今日推荐定投金额（按"工作日定额 + 低配补仓"算法）
-//   total = 0（无当前持仓）→ 仅按目标权重分摊 dailyPerWorkday；无补仓
-//   total > 0 → 每个低配资产额外补仓 = max(0, (target - currentPct)/100 * total) / INVEST_CATCHUP_WORKDAYS
-//   非工作日 → total = 0（前端在 UI 上说明"非工作日建议 0"）
-//   返回 { isWorkday, total, perAsset: [{asset, amount}], note }
-//     note 字符串说明（"非工作日" / "全新起步，无补仓" / "低配补仓按 10 个工作日分摊" 等）
-function computeTodayRecommendation({ rows, total, dailyPerWorkday, workdays }) {
-  const today = new Date();
-  const dow = today.getDay(); // 0=Sun .. 6=Sat
-  const isWorkday = Array.isArray(workdays) && workdays.includes(dow);
-  if (!isWorkday) {
-    return { isWorkday: false, total: 0, perAsset: [], note: '今日非工作日，建议 0' };
-  }
-  // 工作日：基础分摊（按目标权重）+ 低配补仓
-  const baseTotal = Math.max(0, Number(dailyPerWorkday) || 0);
-  const perAsset = rows.map((r) => {
-    const base = +(baseTotal * (Number(r.target) || 0) / 100).toFixed(0);
-    let extra = 0;
-    if (total > 0) {
-      const gapPct = Math.max(0, (Number(r.target) || 0) - (Number(r.currentPct) || 0));
-      if (gapPct > 0) {
-        extra = +((gapPct / 100) * total / INVEST_CATCHUP_WORKDAYS).toFixed(0);
+// 再平衡方案（v3 重做）：把"卖出"和"买入"作为完整方案同时计算
+//   卖出（可选）：每个超配资产卖回到目标值（基于当前 total）
+//   买入：基于"卖出后 total"计算每日买入（基础按目标权重分摊 + 低配按差额 × CATCHUP_WORKDAYS 分摊）
+//   关键点：用户原话"卖出之后，现在的仓位的总金额就不一样了，所以要注意计算方法"——
+//     卖出后的总市值变小，目标值相应变小，买入建议必须按 post-sell total 重算。
+//   当 showSellInRebalance=false：不显示卖出，买入按当前 total 计算（不做 post-sell 重算）
+//   返回 { showSellInRebalance, sells, totalSell, buys, totalBuy, postSellTotal }
+//     sells: [{asset, amount}]    超配资产卖出金额
+//     buys: [{asset, base, extra, amount}]  每个工作日买入金额（基础 + 补仓）
+function computeRebalancePlan({ rows, total, dailyPerWorkday, workdays, showSellInRebalance, catchupWorkdays }) {
+  const sells = [];
+  let postSellTotal = total;
+  if (showSellInRebalance) {
+    // 1. 计算卖出（每个超配资产卖回到目标值——基于当前 total）
+    for (const r of rows) {
+      if (Number(r.deviation) > 0) {
+        const targetAmount = total * (Number(r.target) || 0) / 100;
+        const sellAmount = r.amount - targetAmount;
+        if (sellAmount > 0) {
+          sells.push({ asset: r.name, amount: Math.round(sellAmount) });
+        }
       }
     }
-    return { asset: r.name, amount: base + extra };
-  });
-  const totalRecommended = perAsset.reduce((s, a) => s + a.amount, 0);
-  let note = '';
-  if (total === 0) {
-    note = '全新起步，按目标权重分摊 ' + baseTotal + ' 元/工作日';
-  } else {
-    const hasGap = rows.some((r) => (Number(r.target) || 0) > (Number(r.currentPct) || 0));
-    if (hasGap) {
-      note = '低配补仓按 ' + INVEST_CATCHUP_WORKDAYS + ' 个工作日分摊';
-    } else {
-      note = '当前比例正常，仅按目标权重分摊 ' + baseTotal + ' 元/工作日';
-    }
+    postSellTotal = total - sells.reduce((s, a) => s + a.amount, 0);
   }
-  return { isWorkday: true, total: totalRecommended, perAsset, note };
+  // 2. 计算每日买入（基础按目标权重分摊 + 低配按差额 × catchupWorkdays 分摊）
+  //    基础用同一个 total 计算；extra 用 postSellTotal 计算（按差额补仓）
+  const baseTotal = Math.max(0, Number(dailyPerWorkday) || 0);
+  const buys = rows.map((r) => {
+    const base = baseTotal * (Number(r.target) || 0) / 100;
+    let extra = 0;
+    if (postSellTotal > 0) {
+      // 卖出后此资产剩余金额 = 当前金额 - 此资产的卖出金额
+      const sellForThisAsset = sells.find((s) => s.asset === r.name)?.amount || 0;
+      const postSellAmount = r.amount - sellForThisAsset;
+      const targetAmount = postSellTotal * (Number(r.target) || 0) / 100;
+      const gap = targetAmount - postSellAmount; // 正 = 低配
+      if (gap > 0) {
+        extra = gap / catchupWorkdays;
+      }
+    }
+    return {
+      asset: r.name,
+      base: Math.round(base),
+      extra: Math.round(extra),
+      amount: Math.round(base + extra),
+    };
+  });
+  const totalBuyBase = buys.reduce((s, a) => s + a.base, 0);
+  const totalBuyExtra = buys.reduce((s, a) => s + a.extra, 0);
+  return {
+    showSellInRebalance,
+    sells,
+    totalSell: Math.round(sells.reduce((s, a) => s + a.amount, 0)),
+    buys,
+    totalBuyBase,
+    totalBuyExtra,
+    totalBuy: totalBuyBase + totalBuyExtra,
+    postSellTotal: Math.round(postSellTotal),
+  };
 }
 
 // 软约束警告（编辑模式下用——只是文字警告，不阻断保存）
@@ -2137,9 +2163,11 @@ const server = http.createServer(async (req, res) => {
       underAll.forEach((r) => actions.push({ type: 'buy', asset: r.name, amount: targetAmt(r) - r.amount }));
       return actions;
     })();
-    // 今日推荐定投（按今天是不是工作日 + 当下偏离决定）
-    const todayRecommendation = computeTodayRecommendation({
+    // 再平衡方案（v3：完整卖出+买入方案；买入按 post-sell total 重算）
+    const rebalancePlan = computeRebalancePlan({
       rows, total, dailyPerWorkday, workdays,
+      showSellInRebalance: investConfig.showSellInRebalance,
+      catchupWorkdays: INVEST_CATCHUP_WORKDAYS,
     });
     // 软约束警告（用于编辑模式标红；GET 也透传，前端决定何时显示）
     const warnings = computeWarnings(targets);
@@ -2154,17 +2182,20 @@ const server = http.createServer(async (req, res) => {
         lastRebalance: holdings.lastRebalance || null,
         nextCheck,
         loadFailed: holdingsLoadFailed,
-        // v2 新增字段
+        // v2 字段
         dailyPerWorkday,
         workdays,
-        todayRecommendation,
+        // v3 替换 todayRecommendation → rebalancePlan（含 sells + buys + postSellTotal）
+        rebalancePlan,
+        showSellInRebalance: investConfig.showSellInRebalance,
         warnings,
       },
     });
   }
 
-  // POST /api/invest-calc/config → 保存目标权重 + 预计工作日定投额 + 工作日定义；body: { targets, dailyPerWorkday, workdays }
-  // targets 之和必须 = 100（容差 ±0.5）；dailyPerWorkday ≥0；workdays 是 0-6 整数数组
+  // POST /api/invest-calc/config → 保存目标权重 + 预计工作日定投额 + 工作日定义 + 是否显示卖出建议
+  // body: { targets, dailyPerWorkday, workdays?, showSellInRebalance? }
+  // targets 之和必须 = 100（容差 ±0.5）；dailyPerWorkday ≥0；workdays 是 0-6 整数数组（可选）；showSellInRebalance 布尔（可选）
   if (p === '/api/invest-calc/config' && req.method === 'POST') {
     let body = '';
     for await (const chunk of req) body += chunk;
@@ -2204,10 +2235,23 @@ const server = http.createServer(async (req, res) => {
         }
         newWorkdays = filtered;
       }
+      // showSellInRebalance：可选布尔（v3 新增；缺省保持 in-memory 当前值；非法类型 → 400）
+      let newShowSell = investConfig.showSellInRebalance;
+      if (parsed.showSellInRebalance !== undefined) {
+        if (typeof parsed.showSellInRebalance !== 'boolean') {
+          return json(res, { ok: false, error: 'showSellInRebalance 必须为布尔' }, 400);
+        }
+        newShowSell = parsed.showSellInRebalance;
+      }
       if (investConfigLoadFailed) {
         return json(res, { ok: false, error: '配置文件加载失败，禁止写入（详见 .bak）', loadFailed: true }, 500);
       }
-      investConfig = { targets: newTargets, dailyPerWorkday: newDaily, workdays: newWorkdays };
+      investConfig = {
+        targets: newTargets,
+        dailyPerWorkday: newDaily,
+        workdays: newWorkdays,
+        showSellInRebalance: newShowSell,
+      };
       const ok = saveInvestConfig();
       return json(res, { ok });
     } catch (e) {

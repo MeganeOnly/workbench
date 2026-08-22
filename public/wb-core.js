@@ -112,7 +112,9 @@
   // ===== 数据获取 =====
   // 统一错误处理：HTTP 非 2xx 抛 Error；调用方用 try/catch 捕获
   WB.fetchJSON = async function (url, options) {
-    const r = await fetch(url, options);
+    // 默认 cache:'no-store' 避免 HTTP 缓存返回陈旧数据（v3 修复：showSell 切换后 refresh 拿到旧数据）
+    const opts = Object.assign({ cache: 'no-store' }, options || {});
+    const r = await fetch(url, opts);
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.json();
   };
