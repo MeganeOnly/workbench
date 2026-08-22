@@ -381,6 +381,18 @@ function saveBookmarks() {
 // 注意：D050 隔离 + v1.1 TDZ 教训，常量必须在加载段之前声明（bookmarks 的灾难就是 const 晚于 let 导致 TDZ）。
 const HOLDINGS_PATH = path.join(ROOT, 'invest-holdings.json');
 const INVEST_PERSONAL_PATH = path.join(ROOT, 'invest-personal.json');
+// ---- 投资个人配置默认（缺字段/全新安装时使用） ----
+// 目标权重：方案 B（均衡型 25/20/25/30）——投资-personal.json 的 targets 字段之和不=100 时也回退到这套
+const DEFAULT_INVEST_CONFIG = {
+  targets: {
+    '红利低波50': 25,
+    '沪港深成长红利低波动': 20,
+    '中证全指': 25,
+    '纳斯达克100': 30,
+  },
+  dailyPerWorkday: 100,        // 预计每个工作日定投金额（元；用户设置）
+  workdays: [1, 2, 3, 4, 5],   // 工作日定义（周日=0；默认周一到周五）
+};
 let holdingsLoadFailed = false;
 let holdings = { holdings: {}, lastRebalance: null };
 try {
@@ -422,30 +434,148 @@ function saveHoldings() {
   }
 }
 
-// 读取目标权重（invest-personal.json 的 targets 字段）
-// 不做 LoadFailed 保护（targets 是配置不是数据；解析失败时回退默认方案B 25/20/25/30，不阻断计算）
-function loadTargets() {
-  const DEFAULT_TARGETS = {
-    '红利低波50': 25,
-    '沪港深成长红利低波动': 20,
-    '中证全指': 25,
-    '纳斯达克100': 30,
-  };
-  try {
-    if (!fs.existsSync(INVEST_PERSONAL_PATH)) return DEFAULT_TARGETS;
+// ---- 投资个人配置（invest-personal.json：targets / dailyPerWorkday / workdays） ----
+// 三字段合一：目标权重（必须和=100，容差±0.5）+ 预计每个工作日定投额（默认 100 元）+ 工作日定义（默认 [1,2,3,4,5]，周日=0）
+// 加载失败保护与 holdings 同款：备份为 .bak + 拒写入（v1.1 教训扩展——D050 防护扩到所有用户数据文件）。
+let investConfigLoadFailed = false;
+let investConfig = { ...DEFAULT_INVEST_CONFIG };
+try {
+  if (fs.existsSync(INVEST_PERSONAL_PATH)) {
     const raw = fs.readFileSync(INVEST_PERSONAL_PATH, 'utf8').replace(/^\uFEFF/, '');
     const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && parsed.targets && typeof parsed.targets === 'object') {
-      // targets 字段必须 4 个标的百分比之和 = 100（容差 ±0.5）
-      const t = parsed.targets;
-      const sum = Object.values(t).reduce((s, v) => s + Number(v), 0);
-      if (Math.abs(sum - 100) < 0.5) return t;
-      console.error('invest-personal.json targets 之和 = ' + sum + ' ≠ 100，使用默认目标');
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      // targets: 4 个标的百分比之和必须 = 100（容差 ±0.5）——不达标则用默认
+      let targets = DEFAULT_INVEST_CONFIG.targets;
+      if (parsed.targets && typeof parsed.targets === 'object') {
+        const sum = Object.values(parsed.targets).reduce((s, v) => s + Number(v), 0);
+        if (Math.abs(sum - 100) < 0.5) {
+          targets = parsed.targets;
+        } else {
+          console.error('invest-personal.json targets 之和 = ' + sum + ' ≠ 100，使用默认目标');
+        }
+      }
+      // dailyPerWorkday: 数字 ≥0；非法回退默认
+      const dailyPerWorkday = (typeof parsed.dailyPerWorkday === 'number' && parsed.dailyPerWorkday >= 0)
+        ? parsed.dailyPerWorkday
+        : DEFAULT_INVEST_CONFIG.dailyPerWorkday;
+      // workdays: 0-6 整数数组；非法项过滤后空则用默认
+      const wd = Array.isArray(parsed.workdays)
+        ? parsed.workdays.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6)
+        : [];
+      const workdays = wd.length ? wd : DEFAULT_INVEST_CONFIG.workdays;
+      investConfig = { targets, dailyPerWorkday, workdays };
+    } else {
+      backupCorruptedData(INVEST_PERSONAL_PATH, 'parsed value is not an object');
+      investConfigLoadFailed = true;
     }
-  } catch (e) {
-    console.error('读取 invest-personal.json 失败，使用默认目标:', e.message);
   }
-  return DEFAULT_TARGETS;
+  // 文件不存在 = 全新安装，使用默认；不算失败（不设 LoadFailed）
+} catch (e) {
+  console.error('读取 invest-personal.json 失败:', e.message);
+  backupCorruptedData(INVEST_PERSONAL_PATH, e.message);
+  investConfigLoadFailed = true;
+}
+
+function saveInvestConfig() {
+  if (investConfigLoadFailed) {
+    console.error('[FATAL] 拒绝写入 invest-personal.json：启动加载失败，备份在 ' + INVEST_PERSONAL_PATH + '.bak。请手动检查并从 .bak 恢复后重启服务。');
+    return false;
+  }
+  try {
+    // 保留其它字段（如 sections 描述）；只覆盖我们要管的 3 个字段
+    let existing = {};
+    try {
+      const raw = fs.readFileSync(INVEST_PERSONAL_PATH, 'utf8').replace(/^\uFEFF/, '');
+      existing = JSON.parse(raw) || {};
+    } catch { /* 文件已被备份但内存空对象也要写回 */ }
+    const next = {
+      ...existing,
+      targets: investConfig.targets,
+      dailyPerWorkday: investConfig.dailyPerWorkday,
+      workdays: investConfig.workdays,
+    };
+    fs.writeFileSync(INVEST_PERSONAL_PATH, JSON.stringify(next, null, 2), 'utf8');
+    return true;
+  } catch (e) {
+    console.error('写入 invest-personal.json 失败:', e.message);
+    return false;
+  }
+}
+
+// 向后兼容：旧 loadTargets() 改为包装器（POST /api/invest-calc/holdings 等仍调用）
+// 返回 in-memory 状态（启动时已加载 + POST /api/invest-calc/config 时同步更新）
+function loadTargets() {
+  return investConfig.targets;
+}
+
+// ---- 投资计算器辅助函数 ----
+
+// 今日推荐定投金额（按"工作日定额 + 低配补仓"算法）
+//   total = 0（无当前持仓）→ 仅按目标权重分摊 dailyPerWorkday；无补仓
+//   total > 0 → 每个低配资产额外补仓 = max(0, (target - currentPct)/100 * total) / INVEST_CATCHUP_WORKDAYS
+//   非工作日 → total = 0（前端在 UI 上说明"非工作日建议 0"）
+//   返回 { isWorkday, total, perAsset: [{asset, amount}], note }
+//     note 字符串说明（"非工作日" / "全新起步，无补仓" / "低配补仓按 10 个工作日分摊" 等）
+function computeTodayRecommendation({ rows, total, dailyPerWorkday, workdays }) {
+  const today = new Date();
+  const dow = today.getDay(); // 0=Sun .. 6=Sat
+  const isWorkday = Array.isArray(workdays) && workdays.includes(dow);
+  if (!isWorkday) {
+    return { isWorkday: false, total: 0, perAsset: [], note: '今日非工作日，建议 0' };
+  }
+  // 工作日：基础分摊（按目标权重）+ 低配补仓
+  const baseTotal = Math.max(0, Number(dailyPerWorkday) || 0);
+  const perAsset = rows.map((r) => {
+    const base = +(baseTotal * (Number(r.target) || 0) / 100).toFixed(0);
+    let extra = 0;
+    if (total > 0) {
+      const gapPct = Math.max(0, (Number(r.target) || 0) - (Number(r.currentPct) || 0));
+      if (gapPct > 0) {
+        extra = +((gapPct / 100) * total / INVEST_CATCHUP_WORKDAYS).toFixed(0);
+      }
+    }
+    return { asset: r.name, amount: base + extra };
+  });
+  const totalRecommended = perAsset.reduce((s, a) => s + a.amount, 0);
+  let note = '';
+  if (total === 0) {
+    note = '全新起步，按目标权重分摊 ' + baseTotal + ' 元/工作日';
+  } else {
+    const hasGap = rows.some((r) => (Number(r.target) || 0) > (Number(r.currentPct) || 0));
+    if (hasGap) {
+      note = '低配补仓按 ' + INVEST_CATCHUP_WORKDAYS + ' 个工作日分摊';
+    } else {
+      note = '当前比例正常，仅按目标权重分摊 ' + baseTotal + ' 元/工作日';
+    }
+  }
+  return { isWorkday: true, total: totalRecommended, perAsset, note };
+}
+
+// 软约束警告（编辑模式下用——只是文字警告，不阻断保存）
+//   nasdaqOver: 纳指 > 40%（绝对 %）
+//   redDuoOver: 红利低波50 + 沪港深成长红利低波动 > 45%（绝对 %，分散性不足）
+//   任何字段缺失/为 0 都视为不触发
+function computeWarnings(targets) {
+  const warnings = [];
+  const nasdaq = Number(targets['纳斯达克100']) || 0;
+  if (nasdaq > INVEST_WARN_NASDAQ_MAX) {
+    warnings.push({
+      type: 'nasdaq_over',
+      message: '纳指占比 ' + nasdaq + '% 超过建议上限 ' + INVEST_WARN_NASDAQ_MAX + '%，赌注过大',
+      level: 'warn',
+    });
+  }
+  const red1 = Number(targets['红利低波50']) || 0;
+  const red2 = Number(targets['沪港深成长红利低波动']) || 0;
+  const redSum = red1 + red2;
+  if (redSum > INVEST_WARN_RED_DUO_MAX) {
+    warnings.push({
+      type: 'red_duo_over',
+      message: '双红利低波合计 ' + redSum + '% 超过建议上限 ' + INVEST_WARN_RED_DUO_MAX + '%，分散性不足',
+      level: 'warn',
+    });
+  }
+  return warnings;
 }
 
 // ---- 系统信息卡 mode 持久化（syscards-state.json：8 张内置信息卡的 mode 字段）----
@@ -478,9 +608,8 @@ const SYS_CARDS_WHITELIST = [
   'sys-dida-focus',
   'sys-minimax',
   'sys-rss',
-  // 投资方案卡（v1.x 重做后：1 个计算器 + 1 个硬约束；portfolio/cadence/personal/summary 已被计算器取代）
+  // 投资方案卡（v2 重做后：仅 1 个投资计算器；硬约束删除，警告搬进计算器设置面板）
   'sys-invest-calc',
-  'sys-invest-rules',
 ];
 // 系统卡的展示名（与 app.js SYS_CARDS.name 对齐；用于模式管理区行展示）
 const SYS_CARD_DISPLAY_NAMES = {
@@ -493,18 +622,18 @@ const SYS_CARD_DISPLAY_NAMES = {
   'sys-minimax':      'MiniMax 套餐',
   'sys-rss':          'RSS 订阅',
   'sys-invest-calc':      '投资计算器',
-  'sys-invest-rules':     '硬约束',
 };
 // 投资方案卡数据文件映射（id → JSON 文件名；白名单 + 固定文件名双重防路径遍历）
-// v1.x 重做后只剩「硬约束」卡用文件渲染 + 「我的专属权重」作为计算器的 targets 配置源（不渲染）
-const INVEST_FILES = {
-  'sys-invest-rules':     'invest-rules.json',
-  'sys-invest-personal':  'invest-personal.json',
-};
+// v2 重做后已无 invest-info 类卡；invest-personal.json 改为计算器 config 源（由 INVEST_PERSONAL_PATH 直接读取，不经此映射）
+const INVEST_FILES = {};
 // 阈值常量（与原 invest-cadence.json §再平衡方案 + §5 条硬约束 对齐）
 const INVEST_THRESHOLD_NORMAL = 5;   // 触发季度再平衡的偏差（绝对 %）
 const INVEST_THRESHOLD_EMERG = 10;   // 触发立即再平衡的偏差（绝对 %）
 const INVEST_FORCE_MONTHS = 6;       // 距上次再平衡满 N 个月强制再平衡
+const INVEST_CATCHUP_WORKDAYS = 10;  // 推荐每日定投时，按多少个工作日分摊补仓差距（约 2 周）
+// 软约束阈值（编辑模式下标红警告，不阻止保存；v2 设计：硬约束卡删除，警告搬进设置面板）
+const INVEST_WARN_NASDAQ_MAX = 40;          // 纳指占比建议上限（> 即警告）
+const INVEST_WARN_RED_DUO_MAX = 45;          // 双红利低波合计建议上限（> 即警告，分散性不足）
 let syscardModes = {};  // id -> normalizeModeField 后的 mode 字段（启动时从文件读；旧数据缺省视为 null）
 try {
   if (fs.existsSync(SYSCARDS_PATH)) {
@@ -1943,14 +2072,18 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // 投资计算器：GET /api/invest-calc → 返回目标 / 当前 / 偏差 / 状态判断 / 操作步骤
+  // 投资计算器：GET /api/invest-calc → 返回目标 / 当前 / 偏差 / 状态判断 / 操作步骤 / 今日推荐定投
   // 状态机（与原 invest-cadence.json §再平衡方案 + §5 条硬约束 对齐）：
   //   - 任一偏差 > 10% → 'emergency'（立即再平衡）
   //   - 任一偏差 > 5%  → 'threshold'（季度再平衡触发）
   //   - 距 lastRebalance > 6 个月 → 'forced'（强制再平衡）
   //   - 否则 → 'ok'（无需再平衡）
+  // v2 新增：dailyPerWorkday / workdays / todayRecommendation（基于工作日定投+低配补仓）
+  // v2 新增：warnings（软约束：纳指>40% / 双红利低波合计>45%，仅用于编辑模式展示，GET 也透传便于状态栏）
   if (p === '/api/invest-calc' && req.method === 'GET') {
     const targets = loadTargets();
+    const dailyPerWorkday = investConfig.dailyPerWorkday;
+    const workdays = investConfig.workdays;
     const current = (holdings && holdings.holdings) || {};
     // 计算总额 + 各资产占比
     const assetNames = Object.keys(targets);
@@ -2004,6 +2137,12 @@ const server = http.createServer(async (req, res) => {
       underAll.forEach((r) => actions.push({ type: 'buy', asset: r.name, amount: targetAmt(r) - r.amount }));
       return actions;
     })();
+    // 今日推荐定投（按今天是不是工作日 + 当下偏离决定）
+    const todayRecommendation = computeTodayRecommendation({
+      rows, total, dailyPerWorkday, workdays,
+    });
+    // 软约束警告（用于编辑模式标红；GET 也透传，前端决定何时显示）
+    const warnings = computeWarnings(targets);
     return json(res, {
       ok: true,
       data: {
@@ -2015,8 +2154,60 @@ const server = http.createServer(async (req, res) => {
         lastRebalance: holdings.lastRebalance || null,
         nextCheck,
         loadFailed: holdingsLoadFailed,
+        // v2 新增字段
+        dailyPerWorkday,
+        workdays,
+        todayRecommendation,
+        warnings,
       },
     });
+  }
+
+  // POST /api/invest-calc/config → 保存目标权重 + 预计工作日定投额 + 工作日定义；body: { targets, dailyPerWorkday, workdays }
+  // targets 之和必须 = 100（容差 ±0.5）；dailyPerWorkday ≥0；workdays 是 0-6 整数数组
+  if (p === '/api/invest-calc/config' && req.method === 'POST') {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    try {
+      const parsed = JSON.parse(body);
+      // targets：必须 4 个标的之和 = 100
+      if (!parsed.targets || typeof parsed.targets !== 'object' || Array.isArray(parsed.targets)) {
+        return json(res, { ok: false, error: 'targets 必须为对象' }, 400);
+      }
+      const newTargets = {};
+      for (const name of Object.keys(parsed.targets)) {
+        const v = Number(parsed.targets[name]);
+        if (!Number.isFinite(v) || v < 0) {
+          return json(res, { ok: false, error: 'targets[' + name + '] 非法' }, 400);
+        }
+        newTargets[name] = v;
+      }
+      const sum = Object.values(newTargets).reduce((s, v) => s + v, 0);
+      if (Math.abs(sum - 100) >= 0.5) {
+        return json(res, { ok: false, error: 'targets 之和必须 = 100（当前 ' + sum.toFixed(2) + '）' }, 400);
+      }
+      // dailyPerWorkday：数字 ≥0
+      const newDaily = Number(parsed.dailyPerWorkday);
+      if (!Number.isFinite(newDaily) || newDaily < 0) {
+        return json(res, { ok: false, error: 'dailyPerWorkday 必须为 ≥0 数字' }, 400);
+      }
+      // workdays：0-6 整数数组
+      if (!Array.isArray(parsed.workdays)) {
+        return json(res, { ok: false, error: 'workdays 必须为数组' }, 400);
+      }
+      const newWorkdays = parsed.workdays.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6);
+      if (!newWorkdays.length) {
+        return json(res, { ok: false, error: 'workdays 至少包含 1 个工作日' }, 400);
+      }
+      if (investConfigLoadFailed) {
+        return json(res, { ok: false, error: '配置文件加载失败，禁止写入（详见 .bak）', loadFailed: true }, 500);
+      }
+      investConfig = { targets: newTargets, dailyPerWorkday: newDaily, workdays: newWorkdays };
+      const ok = saveInvestConfig();
+      return json(res, { ok });
+    } catch (e) {
+      return json(res, { ok: false, error: '请求格式错误: ' + e.message }, 400);
+    }
   }
 
   // POST /api/invest-calc/holdings → 保存当前持仓金额；body: { holdings: { asset: amount } }
