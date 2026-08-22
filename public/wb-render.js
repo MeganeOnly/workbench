@@ -657,9 +657,7 @@
     const rows = data.rows || [];
     const total = data.total || 0;
     const dailyPerWorkday = data.dailyPerWorkday || 0;
-    const workdays = Array.isArray(data.workdays) ? data.workdays : [1, 2, 3, 4, 5];
-    // 用一个本地 working copy 暂存用户输入；保存时一并提交
-    const wdSet = new Set(workdays);
+    // workdays 不再由前端管理（v2.1）：服务端保留 schema 字段向后兼容用户自定义值；前端不发送
     // 1. 目标权重（带警告：纳指>40% / 双红利低波>45%）
     const targetsHtml = '<div class="invest-calc-edit-section">' +
       '<div class="invest-calc-edit-title">目标权重（必须之和 = 100）</div>' +
@@ -692,8 +690,10 @@
         '<button class="invest-calc-holdings-save">保存持仓</button>' +
       '</div>' +
       '</div>';
-    // 3. 每日定投（预计每个工作日定投额 + 工作日定义）
-    const workdayNames = ['日', '一', '二', '三', '四', '五', '六'];
+    // 3. 每日定投（预计每个工作日定投额）
+    // 工作日硬编码 [1,2,3,4,5] 周一到周五（A 股 / 港股 / 美股 ETF 通用交易日），不暴露 UI
+    // 选择——用户原话"投机基金都是默认周一到周五的...那个选择项就没必要有"。
+    // 服务端 workdays 字段保留（向后兼容老用户 invest-personal.json 自定义值；缺省回退默认）。
     const workdayHtml = '<div class="invest-calc-edit-section">' +
       '<div class="invest-calc-edit-title">每日定投</div>' +
       '<div class="invest-calc-daily-row">' +
@@ -701,18 +701,7 @@
         '<span class="invest-calc-target-unit">¥</span>' +
         '<input type="number" min="0" step="10" class="invest-calc-daily-input" value="' + dailyPerWorkday + '" />' +
       '</div>' +
-      '<div class="invest-calc-daily-row">' +
-        '<span class="invest-calc-daily-label">工作日</span>' +
-        '<div class="invest-calc-workdays">' +
-        [0, 1, 2, 3, 4, 5, 6].map((d) => {
-          const checked = wdSet.has(d);
-          return '<label class="invest-calc-workday-opt' + (checked ? ' active' : '') + '" data-day="' + d + '">' +
-            '<input type="checkbox" ' + (checked ? 'checked' : '') + ' />' +
-            '<span>' + workdayNames[d] + '</span>' +
-          '</label>';
-        }).join('') +
-        '</div>' +
-      '</div>' +
+      '<div class="invest-calc-daily-note">定投按周一至周五自动安排（基金通用交易日）</div>' +
       '</div>';
     // 4. 操作行
     const actionsHtml = '<div class="invest-calc-edit-actions">' +
@@ -774,16 +763,7 @@
     refs.edit.querySelectorAll('.invest-calc-holding-input').forEach((el) => {
       el.addEventListener('input', updateTotal);
     });
-    // 3. 工作日切换（视觉态）
-    refs.edit.querySelectorAll('.invest-calc-workday-opt').forEach((opt) => {
-      opt.addEventListener('click', (e) => {
-        // label 包裹的 checkbox；点 label 自动切 checkbox，但 preventDefault 后我们手动切
-        e.preventDefault();
-        const cb = opt.querySelector('input[type="checkbox"]');
-        cb.checked = !cb.checked;
-        opt.classList.toggle('active', cb.checked);
-      });
-    });
+    // 3. 工作日硬编码 [1,2,3,4,5] 周一到周五，无 UI（前端 v2.1 移除 toggle）
     // 4. 保存持仓（仅更新 holdings，不动 targets/dailyPerWorkday/workdays）
     const holdingsSaveBtn = refs.edit.querySelector('.invest-calc-holdings-save');
     if (holdingsSaveBtn) {
@@ -818,17 +798,12 @@
           newTargets[el.dataset.asset] = Number(el.value) || 0;
         });
         const daily = Number(refs.edit.querySelector('.invest-calc-daily-input').value) || 0;
-        const wd = [];
-        refs.edit.querySelectorAll('.invest-calc-workday-opt').forEach((opt) => {
-          if (opt.querySelector('input[type="checkbox"]').checked) {
-            wd.push(Number(opt.dataset.day));
-          }
-        });
+        // workdays 不发送（服务端保留 in-memory 当前值；v2.1 删除 UI 后前端不再持有它）
         try {
           const r = await fetchJSON('/api/invest-calc/config', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ targets: newTargets, dailyPerWorkday: daily, workdays: wd }),
+            body: JSON.stringify({ targets: newTargets, dailyPerWorkday: daily }),
           });
           if (r && r.ok) {
             if (WB.showToast) WB.showToast('已保存配置', 'ok');
@@ -1390,6 +1365,14 @@
         if (!modeMatches(SYS_CARDS[id].mode)) continue;
         // RSS 卡按偏好开关显隐（off 时不渲染不占位，等同未安装）
         if (id === 'sys-rss' && (document.body.dataset.rss || 'on') === 'off') continue;
+        // sys-invest-calc 在编辑模式下完全跳过（避免 refresh* 周期性触发 renderGrid 移动卡片，
+        // 导致用户正在编辑的 input focus 丢失——实测 renderInvestCalcView 不会跑因 rec.editing 守卫，
+        // 但第二循环的 target.appendChild(rec.el) 会把卡片从旧父节点移到新父节点，
+        // 即使是同父节点现代浏览器也是 no-op，但实测仍有 remove+add 出现导致 focus 丢失）。
+        if (id === 'sys-invest-calc') {
+          const recE = cardCache.get(id);
+          if (recE && recE.editing) continue;
+        }
         ensureSystemCard(id);
         renderSystemCard(id);
       } else {
@@ -1417,6 +1400,9 @@
     for (const id of order) {
       const rec = cardCache.get(id);
       if (!rec) continue;
+      // sys-invest-calc 在编辑模式下完全跳过——任何 remove/appendChild 都会破坏 input focus
+      // （实测 renderGrid 周期性触发会让卡片在 DOM 中短暂 detach，input 失去焦点）
+      if (id === 'sys-invest-calc' && rec.editing) continue;
       // 模式过滤：从 DOM 移除（保留 cardCache 与顺序位，切换模式时原地回来）
       if (SYS_CARDS[id] && !modeMatches(SYS_CARDS[id].mode)) {
         rec.el.remove();

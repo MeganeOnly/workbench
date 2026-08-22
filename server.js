@@ -2191,13 +2191,18 @@ const server = http.createServer(async (req, res) => {
       if (!Number.isFinite(newDaily) || newDaily < 0) {
         return json(res, { ok: false, error: 'dailyPerWorkday 必须为 ≥0 数字' }, 400);
       }
-      // workdays：0-6 整数数组
-      if (!Array.isArray(parsed.workdays)) {
-        return json(res, { ok: false, error: 'workdays 必须为数组' }, 400);
-      }
-      const newWorkdays = parsed.workdays.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6);
-      if (!newWorkdays.length) {
-        return json(res, { ok: false, error: 'workdays 至少包含 1 个工作日' }, 400);
+      // workdays：可选字段（前端 v2.1 已删除 UI；保留 schema 字段向后兼容 invest-personal.json 中的历史自定义值）
+      // 缺省时保持当前 in-memory 值不变——客户端不发送 = 不修改；非法值忽略
+      let newWorkdays = investConfig.workdays;
+      if (parsed.workdays !== undefined) {
+        if (!Array.isArray(parsed.workdays)) {
+          return json(res, { ok: false, error: 'workdays 必须为数组' }, 400);
+        }
+        const filtered = parsed.workdays.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6);
+        if (!filtered.length) {
+          return json(res, { ok: false, error: 'workdays 至少包含 1 个工作日' }, 400);
+        }
+        newWorkdays = filtered;
       }
       if (investConfigLoadFailed) {
         return json(res, { ok: false, error: '配置文件加载失败，禁止写入（详见 .bak）', loadFailed: true }, 500);

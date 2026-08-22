@@ -3129,40 +3129,12 @@ body[data-sidebar="off"] .expand-sidebar { display: none !important; }
   color: var(--text-2);
   flex: 0 0 auto;
 }
-.invest-calc-workdays {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
-}
-.invest-calc-workday-opt {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 28px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-btn);
-  font-family: var(--font-body);
-  font-size: 12px;
-  font-weight: 500;
+.invest-calc-daily-note {
+  font-size: 11px;
   color: var(--text-3);
-  cursor: pointer;
-  user-select: none;
-  transition: background .12s ease, color .12s ease, border-color .12s ease;
-}
-.invest-calc-workday-opt input[type="checkbox"] {
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
-}
-.invest-calc-workday-opt:hover {
-  border-color: var(--border-strong);
-  color: var(--text);
-}
-.invest-calc-workday-opt.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+  font-style: italic;
+  margin-top: 4px;
+  padding-left: 4px;
 }
 
 /* ---- 编辑模式操作行（保存 / 取消） ---- */

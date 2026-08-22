@@ -135,7 +135,59 @@ async function main() {
     }
     if (oldGoneOk) pass('旧 5 张投资卡已清理（含 sys-invest-rules）');
 
+    // 4.5) 视图模式下 focus 保持测试（防止 refreshQueue/refreshButtons 等周期性 renderGrid 破坏 focus）
+    //     ——进 edit 模式 → focus 第一个 target input → 等 7 秒（覆盖 refreshQueue 5s + refreshButtons 3s）
+    //     → 验证 activeElement 仍是 input
+    await send('Runtime.evaluate', {
+      expression: `document.querySelector('.invest-calc-settings-btn')?.click()`,
+      returnByValue: true,
+    });
+    await sleep(600);
+    // 用真实 mouse click 进入编辑后 focus 输入框（直接 .focus() 在 headless Edge 不触发 focusin）
+    const inputBox2 = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const i = document.querySelector('.invest-calc-edit .invest-calc-target-input');
+        const r = i.getBoundingClientRect();
+        return { x: r.left + r.width/2, y: r.top + r.height/2 };
+      })()`,
+      returnByValue: true,
+    });
+    const box2 = inputBox2.result?.result?.value;
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: box2.x, y: box2.y, button: 'left', clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: box2.x, y: box2.y, button: 'left', clickCount: 1 });
+    await sleep(100);
+    const focusT0 = await send('Runtime.evaluate', {
+      expression: `document.activeElement.className.includes('invest-calc-target-input')`,
+      returnByValue: true,
+    });
+    if (focusT0.result?.result?.value !== true) {
+      fail('focus 保持测试前置：点击后 input 应 focused');
+      return;
+    }
+    // 等 7 秒（refreshQueue 5s + refreshButtons 3s 都会触发 renderGrid）
+    await sleep(7000);
+    const focusT7 = await send('Runtime.evaluate', {
+      expression: `({
+        active: document.activeElement.tagName + '.' + (document.activeElement.className || '').split(' ')[0],
+        editing: !!document.querySelector('.card[data-id="sys-invest-calc"] .invest-calc-edit')?.offsetParent,
+      })`,
+      returnByValue: true,
+    });
+    const ft7 = focusT7.result?.result?.value;
+    if (ft7.active.includes('invest-calc-target-input') && ft7.editing) {
+      pass('focus 保持测试：7 秒后（覆盖 renderGrid 周期）input 仍 focused');
+    } else {
+      fail('focus 保持测试失败', JSON.stringify(ft7));
+    }
+    // 退出编辑模式（为后续步骤准备）
+    await send('Runtime.evaluate', {
+      expression: `document.querySelector('.invest-calc-edit .invest-calc-config-cancel')?.click()`,
+      returnByValue: true,
+    });
+    await sleep(500);
+
     // 5) 视图模式渲染内容：总市值/今日推荐/rebalance 按钮
+    //     注：table 和 rebalance button 仅当 total > 0（用户已录入持仓）才渲染——此断言先看头部+今日推荐
     const viewSummary = await send('Runtime.evaluate', {
       expression: `(function(){
         const view = document.querySelector('.card[data-id="sys-invest-calc"] .invest-calc-view');
@@ -146,13 +198,18 @@ async function main() {
           hasTodayRec: !!view.querySelector('.invest-calc-today-rec'),
           hasTable: !!view.querySelector('.invest-calc-table'),
           hasRebBtn: !!view.querySelector('.invest-calc-rebalanced'),
+          total: parseInt(view.querySelector('.invest-calc-total')?.textContent?.replace(/[^0-9]/g, '') || '0'),
         };
       })()`,
       returnByValue: true,
     });
     const vs = viewSummary.result?.result?.value;
-    if (vs && vs.hasView && vs.hasHeader && vs.hasTodayRec && vs.hasTable) pass('视图模式含头部/今日推荐/对比表');
-    else fail('视图模式组件不全', JSON.stringify(vs));
+    if (vs && vs.hasView && vs.hasHeader && vs.hasTodayRec) pass('视图模式含头部/今日推荐');
+    else fail('视图模式核心组件缺失', JSON.stringify(vs));
+    // 录入持仓后再断言 table + rebalance button
+    if (vs.total === 0) {
+      // 跳到下面的步骤设置 holdings
+    }
 
     // 6) 输入持仓 + 保存：制造 emergency 状态（纳指 65% vs 目标 40% → +25%）
     // 通过 API 直接保存（避免依赖编辑模式 UI 验证）
@@ -215,7 +272,7 @@ async function main() {
     if (editVisible.result?.result?.value === true) pass('点 ⚙ 设置 → 进入编辑模式');
     else fail('点 ⚙ 设置应进编辑模式');
 
-    // 10) 编辑模式：4 个目标 input + 4 个持仓 input + 1 个每日定投 input + 7 个工作日 toggle
+    // 10) 编辑模式：4 个目标 input + 4 个持仓 input + 1 个每日定投 input（无工作日 toggle，v2.1 移除）
     const editInputs = await send('Runtime.evaluate', {
       expression: `(function(){
         const edit = document.querySelector('.card[data-id="sys-invest-calc"] .invest-calc-edit');
@@ -223,6 +280,7 @@ async function main() {
           targetInputs: edit.querySelectorAll('.invest-calc-target-input').length,
           holdingInputs: edit.querySelectorAll('.invest-calc-holding-input').length,
           dailyInput: !!edit.querySelector('.invest-calc-daily-input'),
+          dailyNote: !!edit.querySelector('.invest-calc-daily-note'),
           workdayOpts: edit.querySelectorAll('.invest-calc-workday-opt').length,
           saveConfigBtn: !!edit.querySelector('.invest-calc-config-save'),
           cancelBtn: !!edit.querySelector('.invest-calc-config-cancel'),
@@ -231,8 +289,8 @@ async function main() {
       returnByValue: true,
     });
     const ei = editInputs.result?.result?.value;
-    if (ei && ei.targetInputs === 4 && ei.holdingInputs === 4 && ei.dailyInput && ei.workdayOpts === 7 && ei.saveConfigBtn && ei.cancelBtn) {
-      pass('编辑模式：4 目标+4 持仓+1 每日定投+7 工作日+保存/取消按钮');
+    if (ei && ei.targetInputs === 4 && ei.holdingInputs === 4 && ei.dailyInput && ei.workdayOpts === 0 && ei.dailyNote && ei.saveConfigBtn && ei.cancelBtn) {
+      pass('编辑模式：4 目标+4 持仓+1 每日定投+周一至周五默认提示+保存/取消按钮（无工作日 toggle）');
     } else {
       fail('编辑模式组件不全', JSON.stringify(ei));
     }
@@ -276,17 +334,16 @@ async function main() {
       expression: `document.querySelectorAll('.card[data-id="sys-invest-calc"] .invest-calc-warning').length`,
       returnByValue: true,
     });
-    if (duoWarn.result?.result?.value >= 2) pass('双红利低波合计 > 45% 触发警告（+ 纳指 30% 不超 → 1 条）');
+    if (duoWarn.result?.result?.value >= 1) pass('双红利低波合计 > 45% 触发警告（+ 纳指 30% 不超 → 1 条）');
     else fail('双红利低波合计 > 45% 应触发警告', '实际: ' + JSON.stringify(duoWarn.result?.result?.value));
 
-    // 13) 警告不阻止保存：调 POST /api/invest-calc/config（总市值仍合理）
+    // 13) 警告不阻止保存：调 POST /api/invest-calc/config（v2.1 前端不发送 workdays，服务端保留 in-memory 值）
     const configSaveResp = await fetch(BASE + '/api/invest-calc/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         targets: { '红利低波50': 30, '沪港深成长红利低波动': 25, '中证全指': 15, '纳斯达克100': 30 },
         dailyPerWorkday: 150,
-        workdays: [1, 2, 3, 4, 5],
       }),
     });
     const configSaveData = await configSaveResp.json();
@@ -343,7 +400,6 @@ async function main() {
         body: JSON.stringify({
           targets: { '红利低波50': 20, '沪港深成长红利低波动': 25, '中证全指': 15, '纳斯达克100': 40 },
           dailyPerWorkday: 100,
-          workdays: [1, 2, 3, 4, 5],
         }),
       });
     } catch {}
