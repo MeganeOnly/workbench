@@ -556,6 +556,43 @@ body[data-layout="list"] .card.shortcut-card .run-btn { padding: 10px 14px; font
   box-shadow: 0 0 0 3px var(--ring);
 }
 
+/* 拖拽中：被拖卡脱离网格后留下的占位槽（保持网格布局稳定） */
+.card-drag-phantom {
+  background: transparent;
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--radius-card);
+  /* grid-row-end 由 JS 在 active 时同步被拖卡原 span 值（避免高度塌陷导致邻近卡不收拢） */
+  pointer-events: none;
+  transition: opacity .12s ease;
+  opacity: .55;
+}
+
+/* 拖拽插入位置指示线（与书签拖拽同款：上半部 = 插到目标前，下半部 = 插到目标后） */
+.card.drop-before,
+.card.drop-after {
+  position: relative;
+}
+.card.drop-before::before,
+.card.drop-after::after {
+  content: '';
+  position: absolute;
+  left: -2px;
+  right: -2px;
+  height: 4px;
+  background: var(--accent);
+  border-radius: 2px;
+  box-shadow: 0 0 0 2px var(--ring);
+  pointer-events: none;
+  animation: drop-pulse .9s ease-in-out infinite;
+}
+.card.drop-before::before { top: -8px; }
+.card.drop-after::after { bottom: -8px; }
+
+@keyframes drop-pulse {
+  0%, 100% { opacity: 1; transform: scaleX(1); }
+  50% { opacity: .65; transform: scaleX(.94); }
+}
+
 /* ---- 卡片内容 ---- */
 .card .card-head {
   display: flex;

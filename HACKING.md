@@ -3,7 +3,7 @@
 > **本文件是工作台项目的快速上手入口。** 改代码前 5 分钟读这份 → 直接动手；遇到细节 → 跳 [`DEV.md`](./DEV.md) 对应章节。
 > 完整 API、机制详解、所有版本变更历史都在 DEV.md（53KB，本机专属）；本文件是入口与索引，不是替代。
 >
-> **上次更新**：2026-08-22（投资计算器 v3.4：目标/持仓支持自加/删标的——"我能自己添加标的"；§4 更新改投资计算器行）
+> **上次更新**：2026-08-23（卡片拖拽整改：splice 索引 bug + getOrder 未引用 bug + 视觉反馈占位槽/drop 指示线；§4 新增拖拽调整顺序行）
 
 > **新概念**：mode 字段 4 态——`null` / `string` / `string[]` / `'__hidden__'`（v0.8 新增）；`__hidden__` 是 UI 上"隐藏"按钮对应的 sentinel，与具体模式互斥（content 在任何模式下都不显示）。
 >
@@ -128,6 +128,7 @@
 | 加 RSS 源 | 样式面板「RSS 订阅」区直接加 | **不**改代码（[DEV §6.5](#65-自动添加快捷方式无需改配置不消耗-ai-token)） |
 | 加 DSH 对话状态可视化 | 不需要 | `sys-dsh-sessions` 卡已内置（v0.4 → v0.5 → v0.5.2 → v0.6 → **v0.6.2 二态可见**）；服务端 `/api/dsh-sessions` 代理 DSH 3080；**v0.6.2 圆点语义** working=N 个旋转琥珀扇形 / pending=单琥珀静态点（聚合）/ truly idle / offline / blank 隐藏 |
 | 调整卡片顺序 / 主题 / 偏好 | **不**改代码——`localStorage` 持久化 | 浏览器本地，换浏览器或清缓存会重置 |
+| 改卡片拖拽（顺序调整 + 视觉反馈） | `public/app.js` mouseup/mousemove 段 + `public/style.css` `.card-drag-phantom` / `.drop-before::before` / `.drop-after::after` + `tests/test-card-drag.mjs` | Ctrl+F5 | 拖拽手柄（⠿）→ mousedown → mousemove（位移 >6px 触发 active，插入 phantom 占位槽，其它卡片立刻收拢）→ mousemove 落点出现 `.drop-before` / `.drop-after` 短横线指示插入位置 → mouseup 后 `splice(i,1)` + `indexOf(targetId)` 重算插入位置 + `setOrder` 持久化；**坑**：曾用 `splice(i,1)` 后仍用原 `j` 索引 → 位置算错"回原位"；曾漏 const 引入 `getOrder`/`setOrder` → ReferenceError 静默失败。改完跑 `node tests/test-click.mjs` + `node tests/test-card-drag.mjs`（后者会自动切 entertainment 模式，验证后切回） |
 | 想加"模式"维度（工作/娱乐） | `buttons.json` 加 `"mode": "entertainment"` | 已有实现，见 DEV §8 2026-08-17 条目；模式状态 localStorage `workbench-mode` |
 | 想加新模式（学习/通勤/专注） | `modes.json` 追加一条 `{id, name, icon, readonly}` | 已有实现，见 DEV §8 2026-08-17 v2 条目 + D031；前端切换器自动渲染，零代码改动 |
 | 书签卡“+”无反应 | `app.js` 将 `openModal` 桥接到 `WB.openModal`；`wb-render.js` 保留按钮并按 readonly 显隐 | 卡片渲染与 modal 实现跨文件，按钮监听必须走 `WB.xxx` 运行时桥接；切回可编辑模式后仍可打开添加弹窗 |

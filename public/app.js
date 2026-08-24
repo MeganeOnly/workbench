@@ -16,6 +16,9 @@
   const setNum = WB.setNum;
   const fetchJSON = WB.fetchJSON;
   const reportClientError = WB.reportClientError;
+  // 卡片顺序（wb-render.js 暴露；v1.2 拆分遗漏——mouseup 段直接调用 getOrder() 会触发 ReferenceError 静默失败，拖拽完全失效无报错）
+  const getOrder = WB.getOrder;
+  const setOrder = WB.setOrder;
   // wb-mode.js 暴露的函数（isReadonlyMode / modeMatches / modeLabel / renderModeTags）由下面"模式系统"块声明 let 后再引入
 
   // 状态变量与轮询刷新函数已抽到 wb-state.js（let xxx = WB.xxx 引入本地视图；修改时双写）
@@ -73,7 +76,21 @@
   // 曾实现"按住卡片任意位置拖动（位移 >6px 换位，轻点点击）"，但 6px 阈值把正常点击
   // 误判为拖拽、suppressClick 吞掉 click，按钮"点了没反应"——已收敛回手柄区（见第 8 节变更记录）。
   let pDrag = null;      // { id, el, startX, startY, offsetX, offsetY, width, active }
+  let pDropTargetId = null; // mouseup 落点目标卡片 id（用于 splice 后正确重算插入位置）
+  let pDropBefore = false;  // true = 插到目标前；false = 插到目标后
+  let pPhantom = null;      // 原位置占位槽（被拖卡脱离网格时显示，保持网格布局稳定）
   let suppressClick = false;
+
+  function ensurePhantom() {
+    if (pPhantom) return pPhantom;
+    // 占位槽：插入到 grid 容器内，复制被拖卡原尺寸 + grid-row-end span
+    // 让被拖卡脱离布局后其它卡片不会立刻收拢（用户看到"空槽"），释放后
+    // renderGrid 重排时直接复用此槽（按新顺序 el 会被 appendChild 覆盖 phantom）
+    pPhantom = document.createElement('div');
+    pPhantom.className = 'card-drag-phantom';
+    pPhantom.style.display = 'none';
+    return pPhantom;
+  }
 
   function cleanupDrag() {
     if (pDrag && pDrag.el) {
@@ -88,13 +105,18 @@
       el.style.transition = '';
       el.classList.remove('dragging');
     }
-    document.querySelectorAll('.card.dragging, .card.drag-over').forEach(c => {
-      c.classList.remove('dragging', 'drag-over');
+    document.querySelectorAll('.card.dragging, .card.drag-over, .drop-before, .drop-after').forEach(c => {
+      c.classList.remove('dragging', 'drag-over', 'drop-before', 'drop-after');
     });
+    // 移除占位 phantom（彻底从 DOM 卸载；下次拖拽 ensurePhantom 重建）
+    if (pPhantom && pPhantom.parentNode) pPhantom.parentNode.removeChild(pPhantom);
+    pPhantom = null;
     pDrag = null;
+    pDropTargetId = null;
+    pDropBefore = false;
     WB.dragActive = false;
     document.body.style.userSelect = '';
-    WB.renderGrid(); // 按当前顺序恢复卡片到原位
+    WB.renderGrid(); // 按新顺序重建（被拖卡已脱离 fixed，appendChild 到目标容器正确位置）
   }
 
   document.addEventListener('mousedown', (e) => {
@@ -126,6 +148,7 @@
       pDrag.offsetX = e.clientX - rect.left;
       pDrag.offsetY = e.clientY - rect.top;
       pDrag.width = rect.width;
+      pDrag.height = rect.height;
       el.style.position = 'fixed';
       el.style.width = pDrag.width + 'px';
       el.style.left = (e.clientX - pDrag.offsetX) + 'px';
@@ -136,31 +159,57 @@
       el.style.transition = 'none';
       document.body.style.userSelect = 'none';
       el.classList.add('dragging');
+      // 占位槽：尺寸复制被拖卡，插入到被拖卡原位置（parent 仍是原 grid 容器），
+      // 让其它卡片立刻收拢、网格稳定——用户能看到"位置空出来了"
+      const phantom = ensurePhantom();
+      phantom.style.width = pDrag.width + 'px';
+      phantom.style.height = pDrag.height + 'px';
+      // 同步原 grid-row-end span（被拖卡脱离布局后 phantom 才能维持原网格行高）
+      const origSpan = el.style.gridRowEnd || '';
+      phantom.style.gridRowEnd = origSpan;
+      // 把 phantom 插入到 el 在 DOM 中的"原位置"（el 此时仍在 DOM 中，只是脱离布局）
+      if (el.parentNode) el.parentNode.insertBefore(phantom, el);
+      phantom.style.display = '';
     } else {
       const el = pDrag.el;
       el.style.left = (e.clientX - pDrag.offsetX) + 'px';
       el.style.top = (e.clientY - pDrag.offsetY) + 'px';
     }
     e.preventDefault();
+    // 计算落点（pointer-events:none 已设，elementFromPoint 不会被被拖卡挡住）
     const under = document.elementFromPoint(e.clientX, e.clientY);
     const target = under ? under.closest('.card') : null;
-    document.querySelectorAll('.card.drag-over').forEach(c => c.classList.remove('drag-over'));
-    if (target && target !== pDrag.el) target.classList.add('drag-over');
+    document.querySelectorAll('.card.drag-over, .card.drop-before, .card.drop-after').forEach(c => {
+      c.classList.remove('drag-over', 'drop-before', 'drop-after');
+    });
+    pDropTargetId = null;
+    pDropBefore = false;
+    if (target && target !== pDrag.el && target.dataset.id) {
+      const rect = target.getBoundingClientRect();
+      // 鼠标在目标卡上半部 = 插到目标前；下半部 = 插到目标后
+      const before = e.clientY < rect.top + rect.height / 2;
+      pDropTargetId = target.dataset.id;
+      pDropBefore = before;
+      target.classList.add(before ? 'drop-before' : 'drop-after');
+    }
   });
 
   document.addEventListener('mouseup', (e) => {
     if (!pDrag) return;
     const wasActive = pDrag.active;
     if (wasActive) {
-      const under = document.elementFromPoint(e.clientX, e.clientY);
-      const target = under ? under.closest('.card') : null;
-      if (target && target.dataset.id && target.dataset.id !== pDrag.id) {
+      // 按 drop 指示位（pDropBefore = true 插到目标前；false 插到目标后）重算插入位置：
+      // 先 splice(i,1) 移除被拖卡片，原 j 索引已失效，必须再 indexOf(targetId) 取新的 j，
+      // 再决定是否 +1。原代码直接用旧 j 插入 → 拖拽后位置算错、用户感知"回到原位"。
+      if (pDropTargetId && pDropTargetId !== pDrag.id) {
         const order = getOrder();
         const i = order.indexOf(pDrag.id);
-        const j = order.indexOf(target.dataset.id);
-        if (i >= 0 && j >= 0) {
+        if (i >= 0) {
           order.splice(i, 1);
-          order.splice(j, 0, pDrag.id);
+          let insertAt = order.indexOf(pDropTargetId);
+          if (insertAt < 0) insertAt = order.length;
+          if (!pDropBefore) insertAt += 1;
+          order.splice(insertAt, 0, pDrag.id);
           setOrder(order);
         }
       }
