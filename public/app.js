@@ -961,7 +961,7 @@
     if (!auto.length) {
       const li = document.createElement('li');
       li.className = 'sc-empty';
-      li.textContent = '还没有快捷方式，填写上方路径后点「添加按钮」，或直接把 .exe / .lnk 拖进页面';
+      li.textContent = '还没有快捷方式，填写上方路径后点「添加按钮」，或直接把 .exe / .lnk / .bat 拖进页面';
       ul.appendChild(li);
       return;
     }
@@ -1209,7 +1209,7 @@
       });
     }
 
-    // 文件拖放添加：把 .exe / .lnk 拖进页面即自动添加（Chromium 提供 file.path）
+    // 文件拖放添加：把 .exe / .lnk / .bat 拖进页面即自动添加（Chromium 提供 file.path）
     const overlay = document.getElementById('drop-overlay');
     const hasFiles = (e) => {
       const types = e.dataTransfer && e.dataTransfer.types;
@@ -1259,7 +1259,7 @@
           }
           if (!p) { showToast('无法读取文件路径（' + name + '），请改用粘贴方式', 'err'); continue; }
           const ext = p.split('.').pop().toLowerCase();
-          if (ext !== 'exe' && ext !== 'lnk') { showToast('已忽略非程序文件: ' + name, 'warn'); continue; }
+          if (ext !== 'exe' && ext !== 'lnk' && ext !== 'bat' && ext !== 'cmd') { showToast('已忽略非程序文件: ' + name, 'warn'); continue; }
           await addShortcut('', p, scColor, scSize);
         }
       })();

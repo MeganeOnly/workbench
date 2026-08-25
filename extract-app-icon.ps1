@@ -15,6 +15,12 @@ param(
     [Parameter(Mandatory = $true)][string]$OutPath
 )
 
+# Batch scripts (.bat / .cmd) have no embedded icon resources: bail cleanly
+# (exit 0 without writing) -- the server then falls back to a character icon.
+if ($ExePath -like '*.bat' -or $ExePath -like '*.cmd') {
+    exit 0
+}
+
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
 using System;

@@ -1965,7 +1965,10 @@ const server = http.createServer(async (req, res) => {
       if (!stat || !stat.isFile()) return json(res, { ok: false, error: '路径不存在或不是文件: ' + clean }, 400);
       if (/["%&|<>^]/.test(clean)) return json(res, { ok: false, error: '路径包含不支持的特殊字符（" % & | < > ^）' }, 400);
       const ext = path.extname(clean).toLowerCase();
-      if (ext !== '.exe' && ext !== '.lnk') return json(res, { ok: false, error: '仅支持 .exe 程序或 .lnk 快捷方式' }, 400);
+      // 白名单：.exe 程序 / .lnk 快捷方式 / .bat|.cmd 批处理脚本（如 dev.bat 启动开发服务器）
+      if (ext !== '.exe' && ext !== '.lnk' && ext !== '.bat' && ext !== '.cmd') {
+        return json(res, { ok: false, error: '仅支持 .exe 程序、.lnk 快捷方式或 .bat 脚本' }, 400);
+      }
       const baseName = path.basename(clean, ext);
       const displayName = (name && String(name).trim()) || baseName;
       const existing = new Set(loadButtons().map(b => b.id));
@@ -1990,7 +1993,8 @@ const server = http.createServer(async (req, res) => {
         ],
       };
       // 进程徽章：.exe 直接用文件名；.lnk 解析出真实目标 exe 再配
-      // （解析失败如 UWP 快捷方式则无徽章，不影响点击功能）
+      // （解析失败如 UWP 快捷方式则无徽章，不影响点击功能）。
+      // .bat/.cmd 脚本没有独立进程（跑在 cmd.exe 下且瞬态），不配徽章。
       let processName = null;
       if (ext === '.exe') {
         processName = baseName.toLowerCase() + '.exe';

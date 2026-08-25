@@ -36,6 +36,14 @@ if ($Target -like '*.lnk') {
     if ($s.TargetPath) { $real = $s.TargetPath }
 }
 
+# Batch scripts (.bat / .cmd): no dedicated process to detect or activate --
+# just spawn them in their own console window (typical use: a dev-server
+# script like dev.bat that runs until stopped).
+if ($real -like '*.bat' -or $real -like '*.cmd') {
+    Start-Process -FilePath $Target
+    exit 0
+}
+
 # P/Invoke helpers. Compiled once into %TEMP% and cached across runs:
 # Add-Type from source costs ~0.5 s on every click (visable lag), loading
 # the cached DLL is nearly free. QUIRK: the .NET loader CACHES failed
@@ -123,6 +131,6 @@ if ($real -like '*.exe') {
     }
 }
 
-# Not running: start the target (exe or lnk).
+# Not running: start the target (exe / lnk / bat).
 Start-Process -FilePath $Target
 exit 0
