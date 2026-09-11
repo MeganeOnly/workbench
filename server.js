@@ -55,6 +55,82 @@ function cfg(key, fallback) {
 // ---- dsh web API 配置 ----
 const DSH_WEB_URL = 'http://127.0.0.1:3080';
 
+// ---- DSH 浏览器会话 cookie 自动管理（v0.13+ 协议升级：D061）
+// DSH 9/4 升级（@deepseek-ai/dsh-client-connection）后，所有 /api/* 请求必须带
+// 浏览器会话 cookie（HMAC-SHA256 签名），否则 401。cookie 由 launchToken + 进程密钥
+// 派生，DSH 进程重启后会变化——workbench 不能写死，必须从 dsh 的 stdout 日志抓 token
+// 现场换。详见 DECISIONS.md D061。
+// 路径查找优先级：cfg('dshWebLogPath') > process.env.DSH_WEB_LOG_PATH > ''（throw 错误）
+// 用户需在 config.json 或 env var 配置本机 DSH web stdout 日志路径——避免硬编码绝对路径进 commit（D052）
+const DSH_LOG_PATH = cfg('dshWebLogPath', process.env.DSH_WEB_LOG_PATH || '');
+// 缓存：{ token: string|null, cookie: string|null, cookieAt: 0 }
+// cookieAt 用来在 401 时强制刷新；不解析 maxAge（DSH 默认 30 天，远大于 workbench 重启频率）
+let dshAuthCache = { token: null, cookie: null, cookieAt: 0, logMtime: 0 };
+
+// 从 dsh web stdout 日志抓最新 token 行（DSH 启动时 stdout 写 `dsh web: http://...?token=<TOKEN>`）
+function readDshLaunchToken() {
+  if (!DSH_LOG_PATH) return null;
+  try {
+    const stat = fs.statSync(DSH_LOG_PATH);
+    if (stat.mtimeMs === dshAuthCache.logMtime && dshAuthCache.token) return dshAuthCache.token;
+    dshAuthCache.logMtime = stat.mtimeMs;
+    const content = fs.readFileSync(DSH_LOG_PATH, 'utf8');
+    // 取最后一个匹配行（DSH 每次启动写一行，旧的保留在 log 里）
+    const matches = content.match(/\?token=([A-Za-z0-9_-]+)/g);
+    if (!matches) { dshAuthCache.token = null; return null; }
+    dshAuthCache.token = matches[matches.length - 1].slice('?token='.length);
+    return dshAuthCache.token;
+  } catch (e) {
+    return null;
+  }
+}
+
+// 用 launchToken 换 cookie：GET /?token=<TOKEN> → 303 + Set-Cookie
+function fetchDshAuthCookie(token, timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(DSH_WEB_URL + '/?token=' + encodeURIComponent(token));
+    const req = http.request({
+      host: url.hostname,
+      port: url.port,
+      path: url.pathname + url.search,
+      method: 'GET',
+      timeout: timeoutMs,
+    }, (res) => {
+      // 吃响应体（303 无 body），重要的是 Set-Cookie
+      res.on('data', () => {});
+      res.on('end', () => {
+        if (res.statusCode !== 303) {
+          return reject(new Error('token exchange failed: HTTP ' + res.statusCode));
+        }
+        const raw = res.headers['set-cookie'];
+        if (!raw || raw.length === 0) return reject(new Error('token exchange returned no Set-Cookie'));
+        resolve(raw[0]); // 第一个 cookie（DSH 只 set 一个）
+      });
+    });
+    req.on('error', (err) => reject(new Error('token exchange conn failed: ' + err.message)));
+    req.on('timeout', () => { req.destroy(new Error('token exchange timeout')); });
+    req.end();
+  });
+}
+
+// 取一个有效 cookie：缓存有效直接返回；否则用最新 token 现场换
+async function getDshAuthCookie(forceRefresh = false) {
+  if (!forceRefresh && dshAuthCache.cookie) return dshAuthCache.cookie;
+  const token = readDshLaunchToken();
+  if (!token) {
+    throw new Error('DSH launch token 未找到（dsh-web.log 无 token 行）。请确认 DSH 服务已启动');
+  }
+  try {
+    const cookie = await fetchDshAuthCookie(token);
+    dshAuthCache.cookie = cookie;
+    dshAuthCache.cookieAt = Date.now();
+    return cookie;
+  } catch (e) {
+    dshAuthCache.cookie = null;
+    throw e;
+  }
+}
+
 // ---- Anki 队列配置（ankiQueuePath：与 batch_push.py 输出一致，在 config.json 配置） ----
 const ANKI_QUEUE_PATH = cfg('ankiQueuePath', path.join(ROOT, 'anki-queue.json'));
 const PUSH_STATE_PATH = path.join(ROOT, 'push-state.json');
@@ -1143,37 +1219,66 @@ async function getFavicon(domain, fullUrl) {
 }
 
 // ---- 调用 dsh web API（Typert unary 协议：POST /api/<method>）----
+// v0.13+ 协议升级要点（D059）：
+//   1. endpoint 名用斜杠：`session.create` → `session/create`（Typert namespace/method）
+//   2. payload 包装：调用方传 `{cwd}` / `{sessionId, mode, content}` 原始参数，
+//      内部自动包成 `{args: {request: <原payload>}}`（Typert 严格协议要求"exactly one plain-object args field"）
+//   3. 必须带 DSH 浏览器会话 cookie（HMAC-SHA256 签名），否则 401；
+//      自动从 dsh-web.log 抓 launchToken 换 cookie；401 时强制刷新 cookie 重试一次
+// DSH Typert wire 参数键映射（少数 endpoint 用 `_request`，其余用 `request`；见 D059 /
+// dsh-api-session-controller/lib/typert.host.js 各 method descriptor 的 wire 字段）
+const DSH_ARG_KEY = {
+  'session/list': '_request',
+};
+
 function callDshApi(method, payload, timeoutMs = 30000) {
+  return callDshApiWithRetry(method, payload, timeoutMs, false);
+}
+
+function callDshApiWithRetry(method, payload, timeoutMs, retried) {
   return new Promise((resolve, reject) => {
-    const rpcId = 'workbench-' + Date.now() + '-' + Math.random().toString(16).slice(2, 10);
-    const body = JSON.stringify({ type: 'client-request', rpcId, method, payload });
-    const req = http.request({
-      host: '127.0.0.1',
-      port: 3080,
-      path: '/api/' + method,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(body),
-      },
-      timeout: timeoutMs,
-    }, (res) => {
-      let data = '';
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(data);
-          if (parsed.result && parsed.result.ok) resolve(parsed.result.value);
-          else reject(new Error('dsh API ' + method + ' 失败: ' + (parsed.result ? JSON.stringify(parsed.result) : data.slice(0, 200))));
-        } catch (e) {
-          reject(new Error('dsh API ' + method + ' 响应解析失败: ' + data.slice(0, 200)));
-        }
+    getDshAuthCookie(retried).then((cookie) => {
+      const rpcId = 'workbench-' + Date.now() + '-' + Math.random().toString(16).slice(2, 10);
+      // DSH Typert wire 参数键：大多数 endpoint 是 `request`，但 `session/list` 是 `_request`（D059）。
+      // 通过 endpoint 名查表，无法查表时回退 `request`（更通用，与 dsh-session-controller 主体一致）。
+      const argKey = DSH_ARG_KEY[method] || 'request';
+      const wrappedPayload = { args: { [argKey]: payload || {} } };
+      const body = JSON.stringify({ type: 'client-request', rpcId, method, payload: wrappedPayload });
+      const req = http.request({
+        host: '127.0.0.1',
+        port: 3080,
+        path: '/api/' + method,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+          'Cookie': cookie,
+        },
+        timeout: timeoutMs,
+      }, (res) => {
+        let data = '';
+        res.on('data', (chunk) => { data += chunk; });
+        res.on('end', () => {
+          // 401 = cookie 过期或 DSH 重启换密钥；强制刷新 cookie 重试一次
+          if (res.statusCode === 401 && !retried) {
+            dshAuthCache.cookie = null;
+            callDshApiWithRetry(method, payload, timeoutMs, true).then(resolve, reject);
+            return;
+          }
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.result && parsed.result.ok) resolve(parsed.result.value);
+            else reject(new Error('dsh API ' + method + ' 失败: ' + (parsed.result ? JSON.stringify(parsed.result) : data.slice(0, 200))));
+          } catch (e) {
+            reject(new Error('dsh API ' + method + ' 响应解析失败: ' + data.slice(0, 200)));
+          }
+        });
       });
-    });
-    req.on('error', (err) => reject(new Error('无法连接 dsh web (3080): ' + err.message)));
-    req.on('timeout', () => { req.destroy(new Error('dsh API ' + method + ' 超时')); });
-    req.write(body);
-    req.end();
+      req.on('error', (err) => reject(new Error('无法连接 dsh web (3080): ' + err.message)));
+      req.on('timeout', () => { req.destroy(new Error('dsh API ' + method + ' 超时')); });
+      req.write(body);
+      req.end();
+    }).catch((e) => reject(e));
   });
 }
 
@@ -1208,7 +1313,7 @@ function classifySessions(list) {
 
 async function fetchDshSessions() {
   try {
-    const resp = await callDshApi('session.list', {}, 5000);
+    const resp = await callDshApi('session/list', {}, 5000);
     // DSH 协议：callDshApi 解析的是 result.value；DSH 3080 实际返回 { items: [...] }
     const list = (resp && resp.items) ? resp.items : (Array.isArray(resp) ? resp : []);
     const cls = classifySessions(list);
@@ -1453,13 +1558,14 @@ async function runPush() {
   };
   pushLog(entry);
   try {
-    const created = await callDshApi('session.create', { cwd: cfg('pushCwd', DIDA_DEFAULT_CWD) });
+    const created = await callDshApi('session/create', { cwd: cfg('pushCwd', DIDA_DEFAULT_CWD) });
     const sessionId = created.sessionId;
     entry.sessionId = sessionId;
-    const prompted = await callDshApi('session.prompt', {
+    const prompted = await callDshApi('session/prompt', {
       sessionId: sessionId,
       mode: 'queue',
       content: [{ type: 'text', text: 'push anki 卡片' }],
+      requestId: 'workbench-push-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex'),
     });
     recordPushTime();
     entry.status = 'done';
@@ -1493,13 +1599,14 @@ async function runDida(btn) {
   pushLog(entry);
   try {
     const cwd = btn.cwd || DIDA_DEFAULT_CWD;
-    const created = await callDshApi('session.create', { cwd });
+    const created = await callDshApi('session/create', { cwd });
     const sessionId = created.sessionId;
     entry.sessionId = sessionId;
-    const prompted = await callDshApi('session.prompt', {
+    const prompted = await callDshApi('session/prompt', {
       sessionId: sessionId,
       mode: 'queue',
       content: [{ type: 'text', text: btn.prompt }],
+      requestId: 'workbench-dida-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex'),
     });
     // 只有真正把文字发出去（成功创建会话并收到 prompt 受理）才记为"已完成"
     // 每日按钮记当天日期；weekly 按钮记本周锚点日期（本周点过一次隐藏，下周恢复）
@@ -1568,8 +1675,30 @@ function pushLog(entry) {
 }
 
 // ---- JSON 响应 ----
+// dida-* 端点（dida-today / dida-focus / dida-complete）开 CORS：供 DSH 桌面浮窗
+// 插件（dsh-dida-today-widget）跨 3080→3180 fetch 用。workbench 仅监听 127.0.0.1，
+// Origin 限定 127.0.0.1:* 仍只在 loopback 内可达，无外网风险。其它端点不开 CORS
+// （避免无关请求跨域读取书签 / 队列 / 模式配置等用户数据）。
+function corsOriginForDida(req) {
+  var origin = req.headers && req.headers.origin;
+  if (typeof origin === 'string' && /^https?:\/\/127\.0\.0\.1(:\d+)?$/.test(origin)) return origin;
+  return null;
+}
 function json(res, obj, code = 200) {
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(obj));
+}
+// dida 端点专用 JSON 响应：自动注入 CORS header（loopback Origin 白名单）
+function jsonDida(req, res, obj, code = 200) {
+  var origin = corsOriginForDida(req);
+  var headers = { 'Content-Type': 'application/json; charset=utf-8' };
+  if (origin) {
+    headers['Access-Control-Allow-Origin'] = origin;
+    headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS';
+    headers['Access-Control-Allow-Headers'] = 'Content-Type';
+    headers['Vary'] = 'Origin';
+  }
+  res.writeHead(code, headers);
   res.end(JSON.stringify(obj));
 }
 
@@ -1714,28 +1843,28 @@ const server = http.createServer(async (req, res) => {
     return json(res, data);
   }
 
-  // 滴答今日任务（今日任务信息卡）
+  // 滴答今日任务（今日任务信息卡）—— CORS 头供 DSH 桌面浮窗插件跨域拉取
   if (p === '/api/dida-today' && req.method === 'GET') {
     const data = await queryDidaToday();
-    return json(res, data);
+    return jsonDida(req, res, data);
   }
 
-  // 滴答今日专注时长（番茄钟 + 计时汇总）
+  // 滴答今日专注时长（番茄钟 + 计时汇总）—— CORS 头供 DSH 桌面浮窗插件跨域拉取
   if (p === '/api/dida-focus' && req.method === 'GET') {
     const data = await queryDidaFocusToday();
-    return json(res, data);
+    return jsonDida(req, res, data);
   }
 
-  // 完成任务（点击今日任务列表项）
+  // 完成任务（点击今日任务列表项）—— CORS 头供 DSH 桌面浮窗插件跨域 POST
   if (p === '/api/dida-complete' && req.method === 'POST') {
     let body = '';
     for await (const chunk of req) body += chunk;
     try {
       const { projectId, taskId } = JSON.parse(body);
       const result = await completeDidaTask(projectId, taskId);
-      return json(res, result, result.ok ? 200 : 500);
+      return jsonDida(req, res, result, result.ok ? 200 : 500);
     } catch (e) {
-      return json(res, { ok: false, error: '请求格式错误: ' + e.message }, 400);
+      return jsonDida(req, res, { ok: false, error: '请求格式错误: ' + e.message }, 400);
     }
   }
 
@@ -2343,6 +2472,22 @@ const server = http.createServer(async (req, res) => {
     try { msg = (JSON.parse(body).msg || msg).slice(0, 500); } catch (e) { /* 保留默认 */ }
     console.log('[client] ' + msg);
     return json(res, { ok: true });
+  }
+
+  // CORS preflight（dida-complete POST 用 Content-Type: application/json 触发）；
+  // 只允许 dida-* 端点响应 preflight，其它端点按 405 处理
+  if (req.method === 'OPTIONS' && (p === '/api/dida-today' || p === '/api/dida-focus' || p === '/api/dida-complete')) {
+    var preflightOrigin = corsOriginForDida(req);
+    if (preflightOrigin) {
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': preflightOrigin,
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Max-Age': '600',
+        'Vary': 'Origin'
+      });
+      return res.end();
+    }
   }
 
   // 其余走静态文件

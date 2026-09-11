@@ -4,5 +4,6 @@
   "didaMcpConfig": "C:\\Users\\you\\.dsh\\profiles\\web\\cordis.patch.yml",
   "pushCwd": "D:\\path\\to\\anki-harness-workdir",
   "didaDefaultCwd": "D:\\your\\workspace",
-  "minimaxWeeklyHourlyRatio": 10
+  "minimaxWeeklyHourlyRatio": 10,
+  "dshWebLogPath": "C:\\path\\to\\dsh-web.log"
 }

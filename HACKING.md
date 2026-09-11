@@ -3,7 +3,7 @@
 > **本文件是工作台项目的快速上手入口。** 改代码前 5 分钟读这份 → 直接动手；遇到细节 → 跳 [`DEV.md`](./DEV.md) 对应章节。
 > 完整 API、机制详解、所有版本变更历史都在 DEV.md（53KB，本机专属）；本文件是入口与索引，不是替代。
 >
-> **上次更新**：2026-08-25（快捷方式支持 .bat/.cmd 脚本路径——填 `dev.bat` 这类路径即生成卡片，直接开控制台窗口运行；§2.2 快捷方式行 + 本行同步）
+> **上次更新**：2026-09-08（DSH 9/4 升级引入 browser-trust fence + Typert 协议——`callDshApi` 必须自动管理浏览器会话 cookie、endpoint 改斜杠（`session/list` 等）、payload 自动包装 `{args: {request: ...}}`；§3 第 13 条新增 + §4 新增"DSH API 协议升级"行 + 本行同步；DECISIONS D061 详记）
 
 > **新概念**：mode 字段 4 态——`null` / `string` / `string[]` / `'__hidden__'`（v0.8 新增）；`__hidden__` 是 UI 上"隐藏"按钮对应的 sentinel，与具体模式互斥（content 在任何模式下都不显示）。
 >
@@ -103,6 +103,8 @@
     Get-Content workbench.log | Select-Object -First 1  # 期望 "工作台已启动"
     ```
 
+13. **`callDshApi` 必须自动管理 DSH 浏览器会话 cookie + Typert 协议格式**（D061 / v0.13+）。DSH 9/4 升级后所有 `/api/*` 请求必须带 HMAC-SHA256 签名的 `dsh-auth-<hash>=<signed>` cookie，否则 401 Unauthorized。**核心要点**：(a) endpoint 用斜杠：`session.list` → `session/list`、`session.create` → `session/create`、`session.prompt` → `session/prompt`（DSH 内部 namespace/method）；(b) payload 自动包装：调用方传原始参数对象，内部包成 `{args: {request: <原始>}}`——Typert 严格协议要求 "exactly one plain-object args field"；**例外**：`session/list` 用 `_request` 而非 `request`（DSH 内部少数 endpoint 的 wire 名带下划线，已在 `DSH_ARG_KEY` 表里查）；(c) cookie 自动获取：从 DSH web 的 stdout 日志（路径由 `config.json` 的 `dshWebLogPath` 或 env var `DSH_WEB_LOG_PATH` 配置，**避免硬编码本机路径进 commit**）抓最新 `?token=<TOKEN>` 行 → 调 `GET /?token=<TOKEN>` 拿 Set-Cookie → 缓存到内存；401 时强制刷新 cookie 重试一次。**调用方写 `callDshApi('session/create', {cwd})`，不要写 endpoint 名 wire 名细节**——所有 Typert 协议封装在 callDshApi 内。改完跑 `node tests/test-dsh-sessions.mjs`（session/list 端到端）+ 直接 POST `/api/dida/dida-plan` 实测。**为什么这条铁律不在 D061 之前立即写**：DSH 升级是 9/4，user 9/8 才反馈"按钮不工作"——中间空窗 4 天，期间所有 dida 按钮 / push 按钮 / sys-dsh-sessions 卡都静默失败（HTTP 500，错误信息被 workbench 日志吞了）；下次 DSH 再升级**必须**主动跑 smoke test 而不是等用户反馈——"修改→跑 test-click.mjs→DSH API 调用走一遍"是最低 smoke。
+
 ---
 
 ## 3.5. 用户设计偏好（来自 v0.8 反馈）
@@ -144,6 +146,7 @@
 | 模式管理区按分类收起 | 设置面板「模式管理」5 个分组的标题行（v0.8 可点击 button；v1 新增系统卡组） | localStorage `workbench-fold-mmgr-{groupId}` 持久化；**5 个** groupId 固定：`bookmark` / `feed` / `shortcut` / `manual` / `syscard` |
 | 晚间统一推送 GitHub | 本机开发者约定，按各自 skill / 脚本走 | 自动 fetch + 分歧检测 + 敏感内容审计 + 列文件 + 默认确认 |
 | 调整 MiniMax 周限额 marker 样式 / 算法 / edge case | `public/wb-render.js` 的 `renderMiniMaxCard` + `formatResetIn` + `public/style.css` 的 `.mmx-bar-marker` 段 + `tests/test-minimax.mjs`（5 个 marker 断言 A/B/C/D/E + 2 个形状 A.5） | Ctrl+F5 | v0.9 算法（marker 周期用 `wweek.windowMinutes` 动态）+ v0.9.4 视觉（SVG 右括号 `)`，10×10 viewBox，path `M 5 0 Q 10 5, 5 10`）；位置/title/edge case 逻辑不变 |
+| 改 DSH API 调用 / 修复 dida / push / sys-dsh-sessions 卡"点了没反应"或 HTTP 500 | `server.js` 的 `callDshApi` + `getDshAuthCookie` + `DSH_LOG_PATH` 配置 + `DSH_ARG_KEY` 表 | 重启服务 | **v0.13+ Typert 协议**：endpoint 用斜杠（`session/list` 等）、payload 自动包装 `{args: {request: ...}}`、自动 cookie 401 重试；DSH 9/4 升级引入 browser-trust fence + Typert 协议；详见 §3 第 13 条铁律 + DECISIONS D061 |
 | 改投资计算器（v3.4：自加/删标的） | `public/wb-render.js` 的 `renderInvestCalcView` / `openInvestEdit` + `server.js` 的 `computeRebalancePlan` + `public/style.css` `.invest-calc-*` 段 | Ctrl+F5（仅改 server.js 需重启服务） | v2 设计：外面只看结果（无 input），点 ⚙ 设置进编辑；软约束（纳指>40% / 双红利低波合计>45%）在编辑模式实时红字警告，不阻止保存；**v3.3**：每日定投 = 固定总额（dailyPerWorkday）按缺口比例分配（超配→0），不做"基础+补仓"超发；删除「推荐定投方式」块 + 「操作建议」块；表格「买入/工作日」列是唯一入口；**v3.4**：目标/持仓列表支持自加/删标的（`rec.investAssets` 是两列表唯一真源，辅助函数见 wb-render.js「自加标的辅助」段）；服务端 holdings 端点接受任意标的名 + config 保存时修剪已删标的残留 |
 | 加静态信息卡（数据存 JSON 文件；如投资方案类） | 新建 `invest-xxx.json` + `server.js`（INVEST_FILES + `/api/invest/:id`）+ `public/wb-core.js`（SYS_CARDS 镜像 + CARD_ICONS）+ `public/wb-render.js`（`sys-invest-*` 通用分支 + renderInvestInfoCard helper）+ `public/style.css`（`.invest-info-*` 段） + `.gitignore`（个人专属 JSON） | 重启服务（仅 server.js 改时） | **v2 已弃用**：sys-invest-rules 删除（约束警告搬进计算器编辑模式红字）；如需新卡走 sys-invest-* 通用分支已不再适用，改用 invest-calc 模式 |
 
